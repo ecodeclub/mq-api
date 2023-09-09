@@ -2,7 +2,7 @@ package memory
 
 import (
 	"context"
-	"github.com/ecodeclub/mq"
+	"github.com/ecodeclub/mq-api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"sync"

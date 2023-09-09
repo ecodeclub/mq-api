@@ -3,7 +3,7 @@ package memory
 import (
 	"context"
 	"github.com/ecodeclub/ekit/syncx"
-	"github.com/ecodeclub/mq"
+	"github.com/ecodeclub/mq-api"
 	"sync"
 )
 

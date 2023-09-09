@@ -1,10 +1,10 @@
-module github.com/ecodeclub/mq
+module github.com/ecodeclub/mq-api
 
 go 1.21.0
 
 require (
 	github.com/ecodeclub/ekit v0.0.7
-	github.com/stretchr/testify v1.8.1
+	github.com/stretchr/testify v1.8.4
 )
 
 require (
