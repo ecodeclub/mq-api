@@ -78,20 +78,25 @@ type Mq struct {
 	topics syncx.Map[string, *Topic]
 }
 
+func (m *Mq) Topic(name string, partition int64) error {
+	NewTopic(name)
+	return nil
+}
+
 func NewMq() mq.MQ {
 	return &Mq{
 		syncx.Map[string, *Topic]{},
 	}
 }
 
-func (m *Mq) Consumer(topic string) mq.Consumer {
+func (m *Mq) Consumer(topic string) (mq.Consumer, error) {
 	tp, _ := m.topics.LoadOrStore(topic, NewTopic(topic))
-	return tp.NewConsumer(10)
+	return tp.NewConsumer(10), nil
 }
 
-func (m *Mq) Producer(topic string) mq.Producer {
+func (m *Mq) Producer(topic string) (mq.Producer, error) {
 	tp, _ := m.topics.LoadOrStore(topic, NewTopic(topic))
-	return tp.NewProducer(topic)
+	return tp.NewProducer(topic), nil
 }
 
 func NewTopic(name string, opts ...topicOption) *Topic {

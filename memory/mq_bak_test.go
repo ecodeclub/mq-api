@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/ecodeclub/mq-api"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"sync"
 	"testing"
@@ -31,11 +32,13 @@ func (m *MemoryMqTestSuite) TestMq() {
 		{
 			name: "同一topic,单一消费者,生产者",
 			consumers: func() []mq.Consumer {
-				c := m.mq.Consumer("test_topic")
+				c, err := m.mq.Consumer("test_topic")
+				require.NoError(m.T(), err)
 				return []mq.Consumer{c}
 			}(),
 			producers: func() []mq.Producer {
-				p := m.mq.Producer("test_topic")
+				p, err := m.mq.Producer("test_topic")
+				require.NoError(m.T(), err)
 				return []mq.Producer{p}
 			}(),
 			wantValue: []string{"a", "b", "c", "d"},
