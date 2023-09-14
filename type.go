@@ -11,7 +11,8 @@ type Message struct {
 	Topic  string
 }
 
-type ProducerResult struct{}
+type ProducerResult struct {
+}
 
 type Producer interface {
 	Produce(ctx context.Context, m *Message) (*ProducerResult, error)

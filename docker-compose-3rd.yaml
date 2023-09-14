@@ -12,6 +12,6 @@ services:
       timeout: 1s
       retries: 100
     volumes:
-      - ./scripts/mysql/im_user.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./scripts/mysql/mq.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "3306:3306"

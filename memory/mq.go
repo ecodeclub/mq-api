@@ -78,7 +78,7 @@ type Mq struct {
 	topics syncx.Map[string, *Topic]
 }
 
-func (m *Mq) Topic(name string, partition int64) error {
+func (m *Mq) Topic(name string, partition int) error {
 	NewTopic(name)
 	return nil
 }
