@@ -32,7 +32,7 @@ func (m *MemoryMqTestSuite) TestMq() {
 		{
 			name: "同一topic,单一消费者,生产者",
 			consumers: func() []mq.Consumer {
-				c, err := m.mq.Consumer("test_topic")
+				c, err := m.mq.Consumer("test_topic", "c1")
 				require.NoError(m.T(), err)
 				return []mq.Consumer{c}
 			}(),

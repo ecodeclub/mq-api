@@ -2,7 +2,6 @@ package gorm_mq
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/ecodeclub/ekit/syncx"
@@ -10,6 +9,7 @@ import (
 	"github.com/ecodeclub/mq-api/gorm_mq/balancer/equal_divide"
 	"github.com/ecodeclub/mq-api/gorm_mq/domain"
 	"github.com/ecodeclub/mq-api/gorm_mq/getter/poll"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"log"
 	"sync"
@@ -21,17 +21,28 @@ type Mq struct {
 	producerGetter   ProducerGetter
 	consumerBalancer ConsumerBalancer
 	topics           syncx.Map[string, *Topic]
+	// 每次至多消费多少
+	limit int
+	// 抢占超时时间
+	timeout time.Duration
+	// 续约时间
+	interval time.Duration
 }
+
+type MqOption func(m *Mq)
 
 type Topic struct {
 	Name           string
 	partitionNum   int
-	producerGetter ProducerGetter
 	lock           sync.RWMutex
+	producerGetter ProducerGetter
 	partitionList  []string
-	Consumers      []*MqConsumer
+	//	消费组
+	consumerGroups map[string][]*MqConsumer
 	producerCh     chan *mq.Message
-	MsgCh          []chan *mq.Message
+	closeChs       []chan struct{}
+	msgCh          map[string]chan *mq.Message
+	once           sync.Once
 }
 
 func (m *Mq) Topic(name string, partition int) error {
@@ -50,19 +61,26 @@ func (m *Mq) Topic(name string, partition int) error {
 		partitionList:  partitionList,
 		producerCh:     producerCh,
 		partitionNum:   partition,
+		closeChs:       make([]chan struct{}, 0, 16),
+		msgCh:          make(map[string]chan *mq.Message, 16),
+		lock:           sync.RWMutex{},
 		producerGetter: poll.NewGetter(int64(partition)),
 	}
 	m.topics.Store(name, t)
-	go func() {
-		for {
-			select {
-			case msg := <-producerCh:
-				for i := 0; i < len(t.MsgCh); i++ {
-					t.MsgCh[i] <- msg
-				}
-			}
+	return nil
+}
+
+func (tp *Topic) Close() error {
+	tp.once.Do(func() {
+		tp.lock.Lock()
+		for _, ch := range tp.msgCh {
+			close(ch)
 		}
-	}()
+		for _, ch := range tp.closeChs {
+			close(ch)
+		}
+		tp.lock.Unlock()
+	})
 	return nil
 }
 
@@ -70,6 +88,14 @@ func (m *Mq) genPartition(name string, partition int) (tableName string, err err
 	tableName = fmt.Sprintf("%s_%d", name, partition)
 	err = m.Db.Table(tableName).AutoMigrate(&domain.Partition{})
 	return tableName, err
+}
+
+func (m *Mq) Close() error {
+	m.topics.Range(func(key string, value *Topic) bool {
+		err := value.Close()
+		return err == nil
+	})
+	return nil
 }
 
 func (m *Mq) Producer(topic string) (mq.Producer, error) {
@@ -84,28 +110,44 @@ func (m *Mq) Producer(topic string) (mq.Producer, error) {
 	}, nil
 }
 
-func (m *Mq) Consumer(topic string) (mq.Consumer, error) {
+func (m *Mq) Consumer(topic string, id string) (mq.Consumer, error) {
 	tp, ok := m.topics.Load(topic)
 	if !ok {
 		return nil, errors.New("topic 不存在")
 	}
-	msgCh := make(chan *mq.Message, 100)
-	tp.MsgCh = append(tp.MsgCh, msgCh)
+	// 查看有没有之前创建过的消费组
+	msgCh, ok := tp.msgCh[id]
+	if !ok {
+		msgCh = make(chan *mq.Message, 1000)
+		tp.msgCh[id] = msgCh
+	}
 	mqConsumer := &MqConsumer{
 		topic:      tp,
 		db:         m.Db,
 		partitions: make([]int, 0, 32),
 		msgCh:      msgCh,
+		groupId:    id,
+		name:       uuid.New().String(),
+		limit:      m.limit,
+		timeout:    m.timeout,
+		interval:   m.interval,
 	}
 	// 重新分配consumer对应的分区
 	tp.lock.Lock()
-	res := m.consumerBalancer.Balance(tp.partitionNum, len(tp.Consumers)+1)
-	for i := 0; i < len(tp.Consumers); i++ {
-		tp.Consumers[i].partitions = res[i]
+	closeCh := make(chan struct{}, 0)
+	consumers, ok := tp.consumerGroups[id]
+	if !ok {
+		consumers = make([]*MqConsumer, 0, 16)
 	}
-	mqConsumer.partitions = res[len(tp.Consumers)]
-	tp.Consumers = append(tp.Consumers, mqConsumer)
+	res := m.consumerBalancer.Balance(tp.partitionNum, len(consumers)+1)
+	for i := 0; i < len(consumers); i++ {
+		consumers[i].partitions = res[i]
+	}
+	mqConsumer.partitions = res[len(tp.consumerGroups)]
+	consumers = append(consumers, mqConsumer)
+	tp.closeChs = append(tp.closeChs, closeCh)
 	tp.lock.Unlock()
+	// 启动一个goroutine轮询表中数据
 	go func() {
 		timer := time.NewTicker(2 * time.Second)
 		defer timer.Stop()
@@ -121,132 +163,33 @@ func (m *Mq) Consumer(topic string) (mq.Consumer, error) {
 				}
 				cancel()
 				for _, msg := range msgs {
-					tp.producerCh <- msg
+					msgCh <- msg
 				}
+			case <-closeCh:
+				return
 			}
 		}
 	}()
 	return mqConsumer, nil
 }
 
-func NewMq(Db *gorm.DB) (mq.MQ, error) {
+func NewMq(Db *gorm.DB, opts ...MqOption) (mq.MQ, error) {
 	err := Db.AutoMigrate(&domain.Cursors{})
 	if err != nil {
 		return nil, err
 	}
-	return &Mq{
+	m := &Mq{
 		Db:               Db,
 		topics:           syncx.Map[string, *Topic]{},
 		consumerBalancer: equal_divide.NewBalancer(),
-	}, nil
-}
-
-type MqProducer struct {
-	*Topic
-	DB     *gorm.DB
-	getter ProducerGetter
-}
-
-func (m2 *MqProducer) Produce(ctx context.Context, m *mq.Message) (*mq.ProducerResult, error) {
-	tableName := m2.Topic.partitionList[m2.getter.Get()]
-	newMsg, err := NewMessage(m)
-	if err != nil {
-		return nil, err
+		limit:            20,
+		timeout:          10 * time.Second,
+		interval:         2 * time.Second,
 	}
-	err = m2.DB.Table(tableName).WithContext(ctx).Create(newMsg).Error
-	return nil, err
-}
-
-func NewMessage(m *mq.Message) (*domain.Partition, error) {
-	val, err := json.Marshal(m.Header)
-	if err != nil {
-		return nil, err
+	for _, opt := range opts {
+		opt(m)
 	}
-	return &domain.Partition{
-		Value:  string(m.Value),
-		Key:    string(m.Key),
-		Topic:  m.Topic,
-		Header: string(val),
-	}, nil
+	return m, nil
 }
 
-type MqConsumer struct {
-	topic      *Topic
-	db         *gorm.DB
-	partitions []int
-	msgCh      chan *mq.Message
-}
-
-func (m *MqConsumer) Consume(ctx context.Context) (*mq.Message, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case msg := <-m.msgCh:
-		return msg, nil
-	}
-}
-
-func (m *MqConsumer) ConsumeMsgCh(ctx context.Context) (<-chan *mq.Message, error) {
-	return m.msgCh, nil
-}
-
-func (m *MqConsumer) getMsgFromDB(ctx context.Context) ([]*mq.Message, error) {
-	ans := make([]*mq.Message, 0, 64)
-	for _, p := range m.partitions {
-		// 获取表的游标
-		cursor := &domain.Cursors{}
-		err := m.db.WithContext(ctx).Table(cursor.TableName()).Where("`table` = ?", fmt.Sprintf("%s_%d", m.topic.Name, p)).First(&cursor).Error
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				err = m.db.WithContext(ctx).Table(cursor.TableName()).Create(&domain.Cursors{
-					Table:  fmt.Sprintf("%s_%d", m.topic.Name, p),
-					Cursor: 0,
-				}).Error
-				if err != nil {
-					return nil, err
-				}
-				continue
-			}
-			return nil, err
-		}
-		// 从表内获取数据
-		var vals []*domain.Partition
-		err = m.db.Table(cursor.Table).Where("id > ?", cursor.Cursor).Find(&vals).Error
-		if err != nil {
-			return nil, err
-		}
-		// 将最后一个游标写入
-		if len(vals) > 0 {
-			cursor.Cursor = int64(vals[len(vals)-1].ID)
-		}
-		err = m.db.WithContext(ctx).Table(cursor.TableName()).Updates(cursor).Error
-		if err != nil {
-			return nil, err
-		}
-		// 转化成msg
-		for _, val := range vals {
-			msg, err := convertToMsg(val)
-			if err != nil {
-				return nil, err
-			}
-			ans = append(ans, msg)
-		}
-	}
-	return ans, nil
-}
-
-func convertToMsg(partition *domain.Partition) (*mq.Message, error) {
-	header := mq.Header{}
-	if partition.Header != "" {
-		err := json.Unmarshal([]byte(partition.Header), &header)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return &mq.Message{
-		Value:  []byte(partition.Value),
-		Key:    []byte(partition.Key),
-		Header: header,
-		Topic:  partition.Topic,
-	}, nil
-}
+// 抢占游标

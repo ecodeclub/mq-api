@@ -14,6 +14,7 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"sync"
 	"testing"
 	"time"
 )
@@ -137,30 +138,60 @@ func (g *GormMQSuite) TestProducer() {
 
 func (g *GormMQSuite) TestConsumer() {
 	testcases := []struct {
-		name    string
-		topic   string
-		input   []*mq.Message
-		wantVal []*mq.Message
+		name      string
+		topic     string
+		input     []*mq.Message
+		consumers func(mq mq.MQ) []mq.Consumer
+		// 处理消息
+		consumerFunc func(c mq.Consumer) []*mq.Message
+		wantVal      []*mq.Message
 	}{
 		{
-			name:  "消费消息",
+			name:  "一个消费组内多个消费者",
 			topic: "test_topic",
 			input: []*mq.Message{
 				{
 					Value: []byte("1"),
 					Key:   []byte("1"),
-					Topic: "test_topic",
 				},
 				{
 					Value: []byte("2"),
 					Key:   []byte("2"),
-					Topic: "test_topic",
 				},
 				{
 					Value: []byte("3"),
 					Key:   []byte("3"),
-					Topic: "test_topic",
 				},
+				{
+					Value: []byte("4"),
+					Key:   []byte("4"),
+				},
+				{
+					Value: []byte("5"),
+					Key:   []byte("5"),
+				},
+			},
+			consumers: func(mqm mq.MQ) []mq.Consumer {
+				c11, err := mqm.Consumer("test_topic", "c1")
+				require.NoError(g.T(), err)
+				c12, err := mqm.Consumer("test_topic", "c1")
+				require.NoError(g.T(), err)
+				c13, err := mqm.Consumer("test_topic", "c1")
+				require.NoError(g.T(), err)
+				return []mq.Consumer{
+					c11,
+					c12,
+					c13,
+				}
+			},
+			consumerFunc: func(c mq.Consumer) []*mq.Message {
+				msgCh, err := c.ConsumeMsgCh(context.Background())
+				require.NoError(g.T(), err)
+				msgs := make([]*mq.Message, 0, 32)
+				for val := range msgCh {
+					msgs = append(msgs, val)
+				}
+				return msgs
 			},
 			wantVal: []*mq.Message{
 				{
@@ -178,6 +209,16 @@ func (g *GormMQSuite) TestConsumer() {
 					Key:   []byte("3"),
 					Topic: "test_topic",
 				},
+				{
+					Value: []byte("4"),
+					Key:   []byte("4"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("5"),
+					Key:   []byte("5"),
+					Topic: "test_topic",
+				},
 			},
 		},
 	}
@@ -189,30 +230,27 @@ func (g *GormMQSuite) TestConsumer() {
 			require.NoError(t, err)
 			p, err := gormMq.Producer(tc.topic)
 			require.NoError(t, err)
-			c1, err := gormMq.Consumer(tc.topic)
+			consumers := tc.consumers(gormMq)
+			ans := make([]*mq.Message, 0, len(tc.wantVal))
+			var wg sync.WaitGroup
+			for _, c := range consumers {
+				newc := c
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					msgs := tc.consumerFunc(newc)
+					ans = append(ans, msgs...)
+				}()
+			}
 			for _, msg := range tc.input {
-				_, err = p.Produce(context.Background(), msg)
+				_, err := p.Produce(context.Background(), msg)
 				require.NoError(t, err)
 			}
-			msgCh, err := c1.ConsumeMsgCh(context.Background())
+			time.Sleep(10 * time.Second)
+			err = gormMq.Close()
 			require.NoError(t, err)
-			ans := make([]*mq.Message, 0, len(tc.wantVal))
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			for {
-				select {
-				case msg := <-msgCh:
-					ans = append(ans, msg)
-					if len(ans) == len(tc.wantVal) {
-						break
-					}
-				case <-ctx.Done():
-				}
-				if ctx.Err() != nil {
-					break
-				}
-			}
-			assert.Equal(t, tc.wantVal, ans)
+			wg.Wait()
+			assert.ElementsMatch(t, tc.wantVal, ans)
 		})
 	}
 }

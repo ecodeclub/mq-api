@@ -26,5 +26,6 @@ type Consumer interface {
 type MQ interface {
 	Topic(name string, partition int) error
 	Producer(topic string) (Producer, error)
-	Consumer(topic string) (Consumer, error)
+	Consumer(topic string, id string) (Consumer, error)
+	Close() error
 }

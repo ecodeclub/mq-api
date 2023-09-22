@@ -10,7 +10,7 @@ import (
 type Topic struct {
 	Name        string
 	lock        sync.RWMutex
-	consumerChs []chan *mq.Message
+	consumerChs map[string]chan *mq.Message
 	produceChan chan *mq.Message
 }
 
@@ -22,13 +22,17 @@ func WithProducerChannelSize(size int) topicOption {
 	}
 }
 
-func (t *Topic) NewConsumer(size int) mq.Consumer {
-	consumerCh := make(chan *mq.Message, size)
+func (t *Topic) NewConsumer(size int, id string) mq.Consumer {
 	t.lock.Lock()
 	defer t.lock.Unlock()
-	t.consumerChs = append(t.consumerChs, consumerCh)
+	ch, ok := t.consumerChs[id]
+	if !ok {
+		ch = make(chan *mq.Message, size)
+		t.consumerChs[id] = ch
+	}
+
 	return &TopicConsumer{
-		consumerCh,
+		ConsumerCh: ch,
 	}
 }
 
@@ -88,10 +92,13 @@ func NewMq() mq.MQ {
 		syncx.Map[string, *Topic]{},
 	}
 }
+func (m *Mq) Close() error {
+	return nil
+}
 
-func (m *Mq) Consumer(topic string) (mq.Consumer, error) {
+func (m *Mq) Consumer(topic string, id string) (mq.Consumer, error) {
 	tp, _ := m.topics.LoadOrStore(topic, NewTopic(topic))
-	return tp.NewConsumer(10), nil
+	return tp.NewConsumer(10, id), nil
 }
 
 func (m *Mq) Producer(topic string) (mq.Producer, error) {
@@ -103,6 +110,7 @@ func NewTopic(name string, opts ...topicOption) *Topic {
 	t := &Topic{
 		Name:        name,
 		produceChan: make(chan *mq.Message, 1000),
+		consumerChs: make(map[string]chan *mq.Message),
 	}
 	for _, opt := range opts {
 		opt(t)
