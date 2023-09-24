@@ -10,6 +10,7 @@ import (
 	"github.com/ecodeclub/mq-api/mqerr"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"sync"
 	"time"
 )
 
@@ -20,12 +21,14 @@ type MqConsumer struct {
 	msgCh      chan *mq.Message
 	name       string
 	groupId    string
+	lock       sync.RWMutex
 	// 每次至多消费多少
 	limit int
 	// 抢占超时时间
 	timeout time.Duration
 	// 续约时间
 	interval time.Duration
+	cursor   int64
 }
 
 func (m *MqConsumer) Consume(ctx context.Context) (*mq.Message, error) {
@@ -74,6 +77,7 @@ func (m *MqConsumer) getMsgFromDB(ctx context.Context) ([]*mq.Message, error) {
 			ans = append(ans, msg)
 		}
 	}
+
 	return ans, nil
 }
 
@@ -234,4 +238,11 @@ func (m *MqConsumer) releaseCursor(tableName string, id string, cursor int64) er
 type msgRes struct {
 	msgs []*domain.Partition
 	err  error
+}
+
+func (m *MqConsumer) getCursor() int64 {
+	val := m.cursor
+	newVal := (m.cursor + 1) % int64(len(m.partitions))
+	m.cursor = newVal
+	return val
 }

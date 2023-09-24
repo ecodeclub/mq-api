@@ -1,25 +1,21 @@
 package poll
 
-import "sync"
+import (
+	"hash/fnv"
+)
 
 type Getter struct {
-	cursor    int64
-	partition int64
-	locker    sync.Locker
+	Partition int
 }
 
-func (g *Getter) Get() int64 {
-	g.locker.Lock()
-	defer g.locker.Unlock()
-	g.cursor++
-	g.cursor = g.cursor % g.partition
-	return g.cursor
+// 暂时使用hash，保证同一个key的值，在同一个分区。
+func (g *Getter) Get(key string) int64 {
+	return hashString(key, g.Partition)
 }
 
-func NewGetter(partition int64) *Getter {
-	return &Getter{
-		cursor:    0,
-		partition: partition,
-		locker:    &sync.RWMutex{},
-	}
+func hashString(s string, numBuckets int) int64 {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	hash := h.Sum32()
+	return int64(hash % uint32(numBuckets))
 }

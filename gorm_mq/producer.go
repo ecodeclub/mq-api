@@ -15,7 +15,7 @@ type MqProducer struct {
 }
 
 func (m2 *MqProducer) Produce(ctx context.Context, m *mq.Message) (*mq.ProducerResult, error) {
-	tableName := m2.Topic.partitionList[m2.getter.Get()]
+	tableName := m2.Topic.partitionList[m2.getter.Get(string(m.Key))]
 	newMsg, err := NewMessage(m)
 	if err != nil {
 		return nil, err

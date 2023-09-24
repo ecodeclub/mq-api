@@ -8,7 +8,6 @@ import (
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/gorm_mq/balancer/equal_divide"
 	"github.com/ecodeclub/mq-api/gorm_mq/domain"
-	"github.com/ecodeclub/mq-api/gorm_mq/getter/poll"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"log"
@@ -18,7 +17,7 @@ import (
 
 type Mq struct {
 	Db               *gorm.DB
-	producerGetter   ProducerGetter
+	producerGetter   NewProducerGetter
 	consumerBalancer ConsumerBalancer
 	topics           syncx.Map[string, *Topic]
 	// 每次至多消费多少
@@ -39,7 +38,6 @@ type Topic struct {
 	partitionList  []string
 	//	消费组
 	consumerGroups map[string][]*MqConsumer
-	producerCh     chan *mq.Message
 	closeChs       []chan struct{}
 	msgCh          map[string]chan *mq.Message
 	once           sync.Once
@@ -55,16 +53,14 @@ func (m *Mq) Topic(name string, partition int) error {
 		partitionList = append(partitionList, tableName)
 	}
 
-	producerCh := make(chan *mq.Message, 1000)
 	t := &Topic{
 		Name:           name,
 		partitionList:  partitionList,
-		producerCh:     producerCh,
 		partitionNum:   partition,
 		closeChs:       make([]chan struct{}, 0, 16),
 		msgCh:          make(map[string]chan *mq.Message, 16),
 		lock:           sync.RWMutex{},
-		producerGetter: poll.NewGetter(int64(partition)),
+		producerGetter: m.producerGetter(partition),
 	}
 	m.topics.Store(name, t)
 	return nil
@@ -182,6 +178,7 @@ func NewMq(Db *gorm.DB, opts ...MqOption) (mq.MQ, error) {
 		Db:               Db,
 		topics:           syncx.Map[string, *Topic]{},
 		consumerBalancer: equal_divide.NewBalancer(),
+		producerGetter:   NewGetter,
 		limit:            20,
 		timeout:          10 * time.Second,
 		interval:         2 * time.Second,

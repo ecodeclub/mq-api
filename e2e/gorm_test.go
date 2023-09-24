@@ -69,86 +69,21 @@ func (g *GormMQSuite) TestTopic() {
 
 }
 
-func (g *GormMQSuite) TestProducer() {
-	testcases := []struct {
-		name    string
-		topic   string
-		input   []*mq.Message
-		wantVal []*domain.Partition
-	}{
-		{
-			name:  "发送3条消息",
-			topic: "test_topic",
-			input: []*mq.Message{
-				{
-					Value: []byte("1"),
-					Key:   []byte("1"),
-					Topic: "test_topic",
-				},
-				{
-					Value: []byte("2"),
-					Key:   []byte("2"),
-					Topic: "test_topic",
-				},
-				{
-					Value: []byte("3"),
-					Key:   []byte("3"),
-					Topic: "test_topic",
-				},
-			},
-			wantVal: []*domain.Partition{
-				{
-					Value:  "1",
-					Key:    "1",
-					Topic:  "test_topic",
-					Header: "null",
-				},
-				{
-					Value:  "2",
-					Key:    "2",
-					Topic:  "test_topic",
-					Header: "null",
-				},
-				{
-					Value:  "3",
-					Key:    "3",
-					Topic:  "test_topic",
-					Header: "null",
-				},
-			},
-		},
-	}
-	for _, tc := range testcases {
-		g.T().Run(tc.name, func(t *testing.T) {
-			mq, err := gorm_mq.NewMq(g.db)
-			require.NoError(t, err)
-			err = mq.Topic(tc.topic, 4)
-			require.NoError(t, err)
-			p, err := mq.Producer(tc.topic)
-			require.NoError(t, err)
-			for _, msg := range tc.input {
-				_, err = p.Produce(context.Background(), msg)
-				require.NoError(t, err)
-			}
-			ans, err := g.getValues(tc.topic, 4)
-			assert.Equal(t, tc.wantVal, ans)
-		})
-	}
-}
-
 func (g *GormMQSuite) TestConsumer() {
 	testcases := []struct {
-		name      string
-		topic     string
-		input     []*mq.Message
-		consumers func(mq mq.MQ) []mq.Consumer
+		name       string
+		topic      string
+		input      []*mq.Message
+		partitions int64
+		consumers  func(mq mq.MQ) []mq.Consumer
 		// 处理消息
 		consumerFunc func(c mq.Consumer) []*mq.Message
 		wantVal      []*mq.Message
 	}{
 		{
-			name:  "一个消费组内多个消费者",
-			topic: "test_topic",
+			name:       "一个消费组内多个消费者",
+			topic:      "test_topic",
+			partitions: 2,
 			input: []*mq.Message{
 				{
 					Value: []byte("1"),
@@ -221,12 +156,122 @@ func (g *GormMQSuite) TestConsumer() {
 				},
 			},
 		},
+		{
+			name:       "多个消费组，多个消费者",
+			topic:      "test_topic",
+			partitions: 3,
+			input: []*mq.Message{
+				{
+					Value: []byte("1"),
+					Key:   []byte("1"),
+				},
+				{
+					Value: []byte("2"),
+					Key:   []byte("2"),
+				},
+				{
+					Value: []byte("3"),
+					Key:   []byte("3"),
+				},
+				{
+					Value: []byte("4"),
+					Key:   []byte("4"),
+				},
+				{
+					Value: []byte("5"),
+					Key:   []byte("5"),
+				},
+			},
+			consumers: func(mqm mq.MQ) []mq.Consumer {
+				c11, err := mqm.Consumer("test_topic", "c1")
+				require.NoError(g.T(), err)
+				c12, err := mqm.Consumer("test_topic", "c1")
+				require.NoError(g.T(), err)
+				c13, err := mqm.Consumer("test_topic", "c1")
+				require.NoError(g.T(), err)
+				c21, err := mqm.Consumer("test_topic", "c2")
+				require.NoError(g.T(), err)
+				c22, err := mqm.Consumer("test_topic", "c2")
+				require.NoError(g.T(), err)
+				c23, err := mqm.Consumer("test_topic", "c2")
+				require.NoError(g.T(), err)
+				return []mq.Consumer{
+					c11,
+					c12,
+					c13,
+					c21,
+					c22,
+					c23,
+				}
+			},
+			consumerFunc: func(c mq.Consumer) []*mq.Message {
+				msgCh, err := c.ConsumeMsgCh(context.Background())
+				require.NoError(g.T(), err)
+				msgs := make([]*mq.Message, 0, 32)
+				for val := range msgCh {
+					msgs = append(msgs, val)
+				}
+				return msgs
+			},
+			wantVal: []*mq.Message{
+				{
+					Value: []byte("1"),
+					Key:   []byte("1"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("2"),
+					Key:   []byte("2"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("3"),
+					Key:   []byte("3"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("4"),
+					Key:   []byte("4"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("5"),
+					Key:   []byte("5"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("1"),
+					Key:   []byte("1"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("2"),
+					Key:   []byte("2"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("3"),
+					Key:   []byte("3"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("4"),
+					Key:   []byte("4"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("5"),
+					Key:   []byte("5"),
+					Topic: "test_topic",
+				},
+			},
+		},
 	}
 	for _, tc := range testcases {
 		g.T().Run(tc.name, func(t *testing.T) {
 			gormMq, err := gorm_mq.NewMq(g.db)
 			require.NoError(t, err)
-			err = gormMq.Topic(tc.topic, 4)
+			err = gormMq.Topic(tc.topic, int(tc.partitions))
 			require.NoError(t, err)
 			p, err := gormMq.Producer(tc.topic)
 			require.NoError(t, err)
@@ -251,6 +296,8 @@ func (g *GormMQSuite) TestConsumer() {
 			require.NoError(t, err)
 			wg.Wait()
 			assert.ElementsMatch(t, tc.wantVal, ans)
+			// 清理测试环境
+			g.TearDownTest()
 		})
 	}
 }

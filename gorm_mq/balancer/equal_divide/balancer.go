@@ -10,6 +10,7 @@ func (b *Balancer) Balance(partition int, consumers int) [][]int {
 		ans[index] = append(ans[index], i)
 	}
 	return ans
+
 }
 
 func NewBalancer() *Balancer {
