@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	"log"
 	"sync"
 	"testing"
 	"time"
@@ -27,7 +27,7 @@ type GormMQSuite struct {
 
 func (g *GormMQSuite) SetupSuite() {
 	db, err := gorm.Open(mysql.Open(g.dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		//Logger: logger.Default.LogMode(logger.Info),
 	})
 	require.NoError(g.T(), err)
 	g.db = db
@@ -278,15 +278,12 @@ func (g *GormMQSuite) TestConsumer() {
 			consumers := tc.consumers(gormMq)
 			ans := make([]*mq.Message, 0, len(tc.wantVal))
 			var wg sync.WaitGroup
-			for _, c := range consumers {
-				newc := c
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					msgs := tc.consumerFunc(newc)
-					ans = append(ans, msgs...)
-				}()
-			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				msgs := tc.consumerFunc(consumers[0])
+				ans = append(ans, msgs...)
+			}()
 			for _, msg := range tc.input {
 				_, err := p.Produce(context.Background(), msg)
 				require.NoError(t, err)
@@ -300,6 +297,169 @@ func (g *GormMQSuite) TestConsumer() {
 			g.TearDownTest()
 		})
 	}
+}
+
+// 测试一个分区内的消息是有序的
+func (g *GormMQSuite) TestConsumer_Sort() {
+	testcases := []struct {
+		name       string
+		topic      string
+		input      []*mq.Message
+		partitions int64
+		consumers  func(mq mq.MQ) []mq.Consumer
+		// 处理消息
+		consumerFunc func(c mq.Consumer) []*mq.Message
+		wantVal      []*mq.Message
+	}{
+		{
+			name:       "消息有序",
+			topic:      "test_topic",
+			partitions: 3,
+			input: []*mq.Message{
+				{
+					Key:   []byte("1"),
+					Value: []byte("1"),
+				},
+				{
+					Key:   []byte("1"),
+					Value: []byte("2"),
+				},
+				{
+					Key:   []byte("1"),
+					Value: []byte("3"),
+				},
+				{
+					Key:   []byte("1"),
+					Value: []byte("4"),
+				},
+				{
+					Key:   []byte("4"),
+					Value: []byte("1"),
+				},
+				{
+					Key:   []byte("4"),
+					Value: []byte("2"),
+				},
+				{
+					Key:   []byte("4"),
+					Value: []byte("3"),
+				},
+				{
+					Key:   []byte("4"),
+					Value: []byte("4"),
+				},
+			},
+			consumers: func(mqm mq.MQ) []mq.Consumer {
+				c11, err := mqm.Consumer("test_topic", "c1")
+				require.NoError(g.T(), err)
+				c12, err := mqm.Consumer("test_topic", "c1")
+				require.NoError(g.T(), err)
+				c13, err := mqm.Consumer("test_topic", "c1")
+				require.NoError(g.T(), err)
+				return []mq.Consumer{
+					c11,
+					c12,
+					c13,
+				}
+			},
+			consumerFunc: func(c mq.Consumer) []*mq.Message {
+				msgCh, err := c.ConsumeMsgCh(context.Background())
+				require.NoError(g.T(), err)
+				msgs := make([]*mq.Message, 0, 32)
+				for val := range msgCh {
+					msgs = append(msgs, val)
+				}
+				return msgs
+			},
+			wantVal: []*mq.Message{
+				{
+					Value: []byte("1"),
+					Key:   []byte("1"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("2"),
+					Key:   []byte("1"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("3"),
+					Key:   []byte("1"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("4"),
+					Key:   []byte("1"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("1"),
+					Key:   []byte("4"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("2"),
+					Key:   []byte("4"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("3"),
+					Key:   []byte("4"),
+					Topic: "test_topic",
+				},
+				{
+					Value: []byte("4"),
+					Key:   []byte("4"),
+					Topic: "test_topic",
+				},
+			},
+		},
+	}
+	for _, tc := range testcases {
+		g.T().Run(tc.name, func(t *testing.T) {
+			gormMq, err := gorm_mq.NewMq(g.db)
+			require.NoError(t, err)
+			err = gormMq.Topic(tc.topic, int(tc.partitions))
+			require.NoError(t, err)
+			p, err := gormMq.Producer(tc.topic)
+			require.NoError(t, err)
+			consumers := tc.consumers(gormMq)
+			ans := make([]*mq.Message, 0, len(tc.wantVal))
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				msgs := tc.consumerFunc(consumers[0])
+				ans = append(ans, msgs...)
+			}()
+			for _, msg := range tc.input {
+				_, err := p.Produce(context.Background(), msg)
+				require.NoError(t, err)
+			}
+			time.Sleep(10 * time.Second)
+			err = gormMq.Close()
+			require.NoError(t, err)
+			wg.Wait()
+			wantMap := getMsgMap(tc.wantVal)
+			actualMap := getMsgMap(ans)
+			assert.Equal(t, wantMap, actualMap)
+			// 清理测试环境
+			g.TearDownTest()
+		})
+	}
+}
+
+func getMsgMap(msgs []*mq.Message) map[string][]*mq.Message {
+	wantMap := make(map[string][]*mq.Message, 10)
+	for _, val := range msgs {
+		_, ok := wantMap[string(val.Key)]
+		if !ok {
+			wantMap[string(val.Key)] = append([]*mq.Message{}, val)
+		} else {
+			wantMap[string(val.Key)] = append(wantMap[string(val.Key)], val)
+		}
+	}
+	return wantMap
 }
 
 func (g *GormMQSuite) getTables(prefix string) ([]string, error) {
@@ -338,4 +498,10 @@ func TestMq(t *testing.T) {
 	suite.Run(t, &GormMQSuite{
 		dsn: "root:root@tcp(127.0.0.1:3306)/test?charset=utf8mb4&parseTime=True&loc=Local",
 	})
+}
+
+func msgLog(msgs []*mq.Message) {
+	for i := 0; i < len(msgs); i++ {
+		log.Println(string(msgs[i].Key), string(msgs[i].Value))
+	}
 }

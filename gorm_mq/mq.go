@@ -61,6 +61,7 @@ func (m *Mq) Topic(name string, partition int) error {
 		msgCh:          make(map[string]chan *mq.Message, 16),
 		lock:           sync.RWMutex{},
 		producerGetter: m.producerGetter(partition),
+		consumerGroups: make(map[string][]*MqConsumer, 32),
 	}
 	m.topics.Store(name, t)
 	return nil
@@ -139,8 +140,9 @@ func (m *Mq) Consumer(topic string, id string) (mq.Consumer, error) {
 	for i := 0; i < len(consumers); i++ {
 		consumers[i].partitions = res[i]
 	}
-	mqConsumer.partitions = res[len(tp.consumerGroups)]
+	mqConsumer.partitions = res[len(consumers)]
 	consumers = append(consumers, mqConsumer)
+	tp.consumerGroups[id] = consumers
 	tp.closeChs = append(tp.closeChs, closeCh)
 	tp.lock.Unlock()
 	// 启动一个goroutine轮询表中数据
