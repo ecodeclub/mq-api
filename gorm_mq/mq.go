@@ -191,4 +191,20 @@ func NewMq(Db *gorm.DB, opts ...MqOption) (mq.MQ, error) {
 	return m, nil
 }
 
-// 抢占游标
+func WithLimit(limit int) MqOption {
+	return func(m *Mq) {
+		m.limit = limit
+	}
+}
+
+func WithTimeout(timeout time.Duration) MqOption {
+	return func(m *Mq) {
+		m.timeout = timeout
+	}
+}
+
+func WithInterval(interval time.Duration) MqOption {
+	return func(m *Mq) {
+		m.interval = interval
+	}
+}
