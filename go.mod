@@ -3,8 +3,10 @@ module github.com/ecodeclub/mq-api
 go 1.21.0
 
 require (
+	github.com/confluentinc/confluent-kafka-go/v2 v2.2.0
 	github.com/ecodeclub/ekit v0.0.7
 	github.com/stretchr/testify v1.8.4
+	go.uber.org/multierr v1.11.0
 )
 
 require (
