@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"github.com/ecodeclub/mq-api"
+	"github.com/ecodeclub/mq-api/mqerr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -11,32 +12,63 @@ import (
 	"time"
 )
 
-type BaseSuite struct {
+type TestSuite struct {
 	suite.Suite
 	mqCreator MqCreator
 }
 
 type MqCreator interface {
-	InitMq() mq.MQ
+	Init() mq.MQ
 }
 type ProducerMsg struct {
 	partition int32
 	msg       *mq.Message
 }
 
+func NewBaseSuite(mqCreator MqCreator) *TestSuite {
+	return &TestSuite{
+		mqCreator: mqCreator,
+	}
+}
+
+func (b *TestSuite) SetupTest() {
+	b.deleteTopics()
+	time.Sleep(1 * time.Second)
+}
+
+func (b *TestSuite) deleteTopics() {
+	mq := b.mqCreator.Init()
+	topics := []string{
+		"test_topic",
+		"test_topic1",
+		"test_topic2",
+		"test_topic3",
+		"test_topic4",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err := mq.ClearTopic(ctx, topics)
+	cancel()
+	require.NoError(b.T(), err)
+}
+
+func (b *TestSuite) TearDownTest() {
+	b.deleteTopics()
+	time.Sleep(1 * time.Second)
+}
+
 // 测试消费组
-func (b *BaseSuite) TestMSMQConsumer_DiffGroup() {
+func (b *TestSuite) TestMQConsumer_ConsumerGroup() {
 	testcases := []struct {
-		name         string
-		topic        string
-		partitions   int64
-		input        []*mq.Message
-		consumers    func(mqm mq.MQ) []mq.Consumer
-		consumerFunc func(c mq.Consumer) []*mq.Message
-		wantVal      []*mq.Message
+		name        string
+		topic       string
+		partitions  int64
+		input       []*mq.Message
+		consumers   func(mqm mq.MQ) []mq.Consumer
+		consumeFunc func(c mq.Consumer) []*mq.Message
+		wantVal     []*mq.Message
 	}{
 		{
-			name:       "多个消费组,多个消费组并行消费",
+			name:       "多个消费组订阅同一个Topic,消费组之间可以重复消费消息",
 			topic:      "test_topic1",
 			partitions: 4,
 			input: []*mq.Message{
@@ -83,8 +115,8 @@ func (b *BaseSuite) TestMSMQConsumer_DiffGroup() {
 					c23,
 				}
 			},
-			consumerFunc: func(c mq.Consumer) []*mq.Message {
-				msgCh, err := c.ConsumeMsgCh(context.Background())
+			consumeFunc: func(c mq.Consumer) []*mq.Message {
+				msgCh, err := c.ConsumeChan(context.Background())
 				require.NoError(b.T(), err)
 				msgs := make([]*mq.Message, 0, 32)
 				for val := range msgCh {
@@ -146,7 +178,7 @@ func (b *BaseSuite) TestMSMQConsumer_DiffGroup() {
 			},
 		},
 		{
-			name:       "一个消费组竞争消费",
+			name:       "同一消费者组内,各个消费者竞争消费消息",
 			topic:      "test_topic2",
 			partitions: 4,
 			input: []*mq.Message{
@@ -193,8 +225,8 @@ func (b *BaseSuite) TestMSMQConsumer_DiffGroup() {
 					c16,
 				}
 			},
-			consumerFunc: func(c mq.Consumer) []*mq.Message {
-				msgCh, err := c.ConsumeMsgCh(context.Background())
+			consumeFunc: func(c mq.Consumer) []*mq.Message {
+				msgCh, err := c.ConsumeChan(context.Background())
 				require.NoError(b.T(), err)
 				msgs := make([]*mq.Message, 0, 32)
 				for val := range msgCh {
@@ -233,7 +265,7 @@ func (b *BaseSuite) TestMSMQConsumer_DiffGroup() {
 	}
 	for _, tc := range testcases {
 		b.T().Run(tc.name, func(t *testing.T) {
-			mqm := b.mqCreator.InitMq()
+			mqm := b.mqCreator.Init()
 			err := mqm.Topic(context.Background(), tc.topic, int(tc.partitions))
 			require.NoError(t, err)
 			p, err := mqm.Producer(tc.topic)
@@ -247,7 +279,7 @@ func (b *BaseSuite) TestMSMQConsumer_DiffGroup() {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					msgs := tc.consumerFunc(newc)
+					msgs := tc.consumeFunc(newc)
 					locker.Lock()
 					ans = append(ans, msgs...)
 					locker.Unlock()
@@ -257,7 +289,7 @@ func (b *BaseSuite) TestMSMQConsumer_DiffGroup() {
 				_, err := p.Produce(context.Background(), msg)
 				require.NoError(t, err)
 			}
-			time.Sleep(5 * time.Second)
+			time.Sleep(15 * time.Second)
 			err = mqm.Close()
 			require.NoError(t, err)
 			wg.Wait()
@@ -267,7 +299,7 @@ func (b *BaseSuite) TestMSMQConsumer_DiffGroup() {
 }
 
 // 测试同一partition下的顺序
-func (b *BaseSuite) TestMSMQConsumer_PartitionSort() {
+func (b *TestSuite) TestMQConsumer_OrderOfMessagesWithinAPartition() {
 	testcases := []struct {
 		name         string
 		topic        string
@@ -329,7 +361,7 @@ func (b *BaseSuite) TestMSMQConsumer_PartitionSort() {
 				}
 			},
 			consumerFunc: func(c mq.Consumer) []*mq.Message {
-				msgCh, err := c.ConsumeMsgCh(context.Background())
+				msgCh, err := c.ConsumeChan(context.Background())
 				require.NoError(b.T(), err)
 				msgs := make([]*mq.Message, 0, 32)
 				for val := range msgCh {
@@ -383,7 +415,7 @@ func (b *BaseSuite) TestMSMQConsumer_PartitionSort() {
 	}
 	for _, tc := range testcases {
 		b.T().Run(tc.name, func(t *testing.T) {
-			mqm := b.mqCreator.InitMq()
+			mqm := b.mqCreator.Init()
 			err := mqm.Topic(context.Background(), tc.topic, int(tc.partitions))
 			require.NoError(t, err)
 			p, err := mqm.Producer(tc.topic)
@@ -407,7 +439,7 @@ func (b *BaseSuite) TestMSMQConsumer_PartitionSort() {
 				_, err := p.Produce(context.Background(), msg)
 				require.NoError(t, err)
 			}
-			time.Sleep(5 * time.Second)
+			time.Sleep(15 * time.Second)
 			err = mqm.Close()
 			require.NoError(t, err)
 			wg.Wait()
@@ -419,7 +451,7 @@ func (b *BaseSuite) TestMSMQConsumer_PartitionSort() {
 }
 
 // 测试发送到指定分区
-func (b *BaseSuite) TestMSMQProducer_ProduceWithPartition() {
+func (b *TestSuite) TestMQProducer_ProduceWithSpecifiedPartitionID() {
 	testcases := []struct {
 		name         string
 		topic        string
@@ -478,44 +510,44 @@ func (b *BaseSuite) TestMSMQProducer_ProduceWithPartition() {
 			},
 			wantVal: []*mq.Message{
 				{
-					Value:     []byte("1"),
-					Key:       []byte("1"),
-					Topic:     "test_topic4",
-					Partition: 0,
+					Value:       []byte("1"),
+					Key:         []byte("1"),
+					Topic:       "test_topic4",
+					PartitionID: 0,
 				},
 				{
-					Value:     []byte("2"),
-					Key:       []byte("2"),
-					Topic:     "test_topic4",
-					Partition: 1,
+					Value:       []byte("2"),
+					Key:         []byte("2"),
+					Topic:       "test_topic4",
+					PartitionID: 1,
 				},
 				{
-					Value:     []byte("3"),
-					Key:       []byte("3"),
-					Topic:     "test_topic4",
-					Partition: 2,
+					Value:       []byte("3"),
+					Key:         []byte("3"),
+					Topic:       "test_topic4",
+					PartitionID: 2,
 				},
 				{
-					Value:     []byte("4"),
-					Key:       []byte("4"),
-					Topic:     "test_topic4",
-					Partition: 0,
+					Value:       []byte("4"),
+					Key:         []byte("4"),
+					Topic:       "test_topic4",
+					PartitionID: 0,
 				},
 				{
-					Value:     []byte("5"),
-					Key:       []byte("5"),
-					Topic:     "test_topic4",
-					Partition: 1,
+					Value:       []byte("5"),
+					Key:         []byte("5"),
+					Topic:       "test_topic4",
+					PartitionID: 1,
 				},
 				{
-					Value:     []byte("6"),
-					Key:       []byte("6"),
-					Topic:     "test_topic4",
-					Partition: 2,
+					Value:       []byte("6"),
+					Key:         []byte("6"),
+					Topic:       "test_topic4",
+					PartitionID: 2,
 				},
 			},
 			consumerFunc: func(c mq.Consumer) []*mq.Message {
-				msgCh, err := c.ConsumeMsgCh(context.Background())
+				msgCh, err := c.ConsumeChan(context.Background())
 				require.NoError(b.T(), err)
 				msgs := make([]*mq.Message, 0, 32)
 				for val := range msgCh {
@@ -527,7 +559,7 @@ func (b *BaseSuite) TestMSMQProducer_ProduceWithPartition() {
 	}
 	for _, tc := range testcases {
 		b.T().Run(tc.name, func(t *testing.T) {
-			mqm := b.mqCreator.InitMq()
+			mqm := b.mqCreator.Init()
 			err := mqm.Topic(context.Background(), tc.topic, int(tc.partitions))
 			require.NoError(t, err)
 			p, err := mqm.Producer(tc.topic)
@@ -555,8 +587,9 @@ func (b *BaseSuite) TestMSMQProducer_ProduceWithPartition() {
 				_, err := p.ProduceWithPartition(context.Background(), msg.msg, msg.partition)
 				require.NoError(t, err)
 			}
-			time.Sleep(5 * time.Second)
+			time.Sleep(15 * time.Second)
 			err = mqm.Close()
+
 			require.NoError(t, err)
 			wg.Wait()
 			assert.ElementsMatch(t, tc.wantVal, genWithPartitionMsg(ans))
@@ -564,9 +597,44 @@ func (b *BaseSuite) TestMSMQProducer_ProduceWithPartition() {
 	}
 }
 
+// 测试close后调用各个方法
+func (b *TestSuite) TestMQProducer_Close() {
+	t := b.T()
+	topic := "test_topic5"
+	mqm := b.mqCreator.Init()
+	err := mqm.Topic(context.Background(), topic, 4)
+	require.NoError(t, err)
+	p, err := mqm.Producer(topic)
+	require.NoError(t, err)
+	c, err := mqm.Consumer(topic, "1")
+	require.NoError(t, err)
+	// 调用close方法
+	err = mqm.Close()
+	require.NoError(t, err)
+	// mq会返回ErrMqIsClosed
+	err = mqm.Topic(context.Background(), "test_topic6", 4)
+	assert.Equal(t, mqerr.ErrMqIsClosed, err)
+	_, err = mqm.Producer(topic)
+	assert.Equal(t, mqerr.ErrMqIsClosed, err)
+	_, err = mqm.Consumer(topic, "1")
+	assert.Equal(t, mqerr.ErrMqIsClosed, err)
+	err = mqm.ClearTopic(context.Background(), []string{topic})
+	assert.Equal(t, mqerr.ErrMqIsClosed, err)
+	// producer会返回ErrProducerIsClosed
+	_, err = p.Produce(context.Background(), &mq.Message{})
+	assert.Equal(t, mqerr.ErrProducerIsClosed, err)
+	_, err = p.ProduceWithPartition(context.Background(), &mq.Message{}, 0)
+	assert.Equal(t, mqerr.ErrProducerIsClosed, err)
+	// consumer会返回ErrConsumerIsClosed
+	_, err = c.ConsumeChan(context.Background())
+	assert.Equal(t, mqerr.ErrConsumerIsClosed, err)
+	_, err = c.Consume(context.Background())
+	assert.Equal(t, mqerr.ErrConsumerIsClosed, err)
+}
+
 func genMsg(msgs []*mq.Message) []*mq.Message {
 	for index, _ := range msgs {
-		msgs[index].Partition = 0
+		msgs[index].PartitionID = 0
 		msgs[index].Offset = 0
 		msgs[index].Header = nil
 	}
@@ -592,4 +660,9 @@ func getMsgMap(msgs []*mq.Message) map[string][]*mq.Message {
 		}
 	}
 	return wantMap
+}
+
+func TestMq(t *testing.T) {
+	// 测试kafka的实现
+	suite.Run(t, NewBaseSuite(NewKafkaSuite([]string{"127.0.0.1:9092"})))
 }

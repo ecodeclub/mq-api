@@ -15,3 +15,15 @@ func ConvertHeaderSliceToMap(headers []kafka.Header) mq.Header {
 
 	return headerMap
 }
+
+func ConvertHeaderMap(headerMap mq.Header) []kafka.Header {
+	headers := make([]kafka.Header, 0, len(headerMap))
+	for key, value := range headerMap {
+		header := kafka.Header{
+			Key:   key,
+			Value: []byte(value),
+		}
+		headers = append(headers, header)
+	}
+	return headers
+}

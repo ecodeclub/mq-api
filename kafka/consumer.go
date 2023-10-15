@@ -6,72 +6,76 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/common"
+	"github.com/ecodeclub/mq-api/mqerr"
 	"log"
 	"sync"
 	"time"
 )
 
-type CustomConsumer struct {
+type Consumer struct {
 	topic string
 	id    string
 	// 负责关闭开启的goroutine
 	closeCh  chan struct{}
+	closed   bool
 	consumer *kafka.Consumer
 	once     sync.Once
+	locker   sync.RWMutex
 	msgCh    chan *mq.Message
 }
 
-func (c *CustomConsumer) Consume(ctx context.Context) (*mq.Message, error) {
+func (c *Consumer) Consume(ctx context.Context) (*mq.Message, error) {
+	if c.closed {
+		return nil, mqerr.ErrConsumerIsClosed
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case m := <-c.msgCh:
 		return m, nil
+	case <-c.closeCh:
+		return nil, mqerr.ErrConsumerIsClosed
 	}
 }
 
-func (c *CustomConsumer) ConsumeMsgCh(ctx context.Context) (<-chan *mq.Message, error) {
+func (c *Consumer) ConsumeChan(ctx context.Context) (<-chan *mq.Message, error) {
+	if c.closed {
+		return nil, mqerr.ErrConsumerIsClosed
+	}
 	return c.msgCh, nil
 }
 
-func (c *CustomConsumer) Close() error {
+func (c *Consumer) Close() error {
 	var err error
 	c.once.Do(func() {
 		close(c.closeCh)
-		//err = c.consumer.Close()
 	})
+	c.locker.Lock()
+	c.closed = true
+	c.locker.Unlock()
 	return err
 }
-func (c *CustomConsumer) ConsumerSeek(partition int64, offset int64) error {
-	tp := kafka.TopicPartition{
-		Topic:     &c.topic,
-		Partition: int32(partition),
-		Offset:    kafka.Offset(offset),
-	}
-	return c.consumer.Assign([]kafka.TopicPartition{tp})
-}
 
-// GetMsgFromKafka 完成持续从kafka内获取数据
-func (c *CustomConsumer) GetMsgFromKafka() {
-	defer c.consumer.Close()
+// getMsgFromKafka 完成持续从kafka内获取数据
+func (c *Consumer) getMsgFromKafka() {
+	defer func() {
+		c.consumer.Close()
+		close(c.msgCh)
+	}()
 	for {
 		select {
 		case <-c.closeCh:
-			close(c.msgCh)
 			return
 		default:
-			if c.consumer.IsClosed() {
-				return
-			}
-			m, err := c.consumer.ReadMessage(2 * time.Second)
+			m, err := c.consumer.ReadMessage(100 * time.Millisecond)
 			if err == nil {
 				msg := &mq.Message{
-					Value:     m.Value,
-					Key:       m.Key,
-					Header:    common.ConvertHeaderSliceToMap(m.Headers),
-					Topic:     *m.TopicPartition.Topic,
-					Partition: int64(m.TopicPartition.Partition),
-					Offset:    int64(m.TopicPartition.Offset),
+					Value:       m.Value,
+					Key:         m.Key,
+					Header:      common.ConvertHeaderSliceToMap(m.Headers),
+					Topic:       *m.TopicPartition.Topic,
+					PartitionID: int64(m.TopicPartition.Partition),
+					Offset:      int64(m.TopicPartition.Offset),
 				}
 				select {
 				case c.msgCh <- msg:
@@ -84,4 +88,10 @@ func (c *CustomConsumer) GetMsgFromKafka() {
 			}
 		}
 	}
+}
+
+func (c *Consumer) isClosed() bool {
+	c.locker.RLock()
+	defer c.locker.RUnlock()
+	return c.closed
 }
