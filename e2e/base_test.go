@@ -44,6 +44,7 @@ func (b *TestSuite) deleteTopics() {
 		"test_topic2",
 		"test_topic3",
 		"test_topic4",
+		"test_topic5",
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	err := mq.ClearTopic(ctx, topics)
