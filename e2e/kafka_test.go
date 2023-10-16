@@ -1,23 +1,14 @@
 package e2e
 
 import (
-	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/kafka"
+	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
+	"testing"
 )
 
-type KafkaSuite struct {
-	brokers []string
-}
-
-func NewKafkaSuite(brokers []string) *KafkaSuite {
-	return &KafkaSuite{
-		brokers: brokers,
-	}
-}
-func (k *KafkaSuite) Init() mq.MQ {
-	kafkaMq, err := kafka.NewMQ(k.brokers)
-	if err != nil {
-		panic(err)
-	}
-	return kafkaMq
+func TestMq(t *testing.T) {
+	q, err := kafka.NewMQ([]string{"127.0.0.1:9092"})
+	require.NoError(t, err)
+	suite.Run(t, NewBaseSuite(q))
 }

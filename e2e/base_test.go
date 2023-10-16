@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/multierr"
 	"sync"
 	"testing"
 	"time"
@@ -14,20 +15,17 @@ import (
 
 type TestSuite struct {
 	suite.Suite
-	mqCreator MqCreator
+	testMq mq.MQ
 }
 
-type MqCreator interface {
-	Init() mq.MQ
-}
 type ProducerMsg struct {
 	partition int32
 	msg       *mq.Message
 }
 
-func NewBaseSuite(mqCreator MqCreator) *TestSuite {
+func NewBaseSuite(mq mq.MQ) *TestSuite {
 	return &TestSuite{
-		mqCreator: mqCreator,
+		testMq: mq,
 	}
 }
 
@@ -37,7 +35,6 @@ func (b *TestSuite) SetupTest() {
 }
 
 func (b *TestSuite) deleteTopics() {
-	mq := b.mqCreator.Init()
 	topics := []string{
 		"test_topic",
 		"test_topic1",
@@ -45,16 +42,12 @@ func (b *TestSuite) deleteTopics() {
 		"test_topic3",
 		"test_topic4",
 		"test_topic5",
+		"test_topic6",
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	err := mq.ClearTopic(ctx, topics)
+	err := b.testMq.ClearTopic(ctx, topics)
 	cancel()
 	require.NoError(b.T(), err)
-}
-
-func (b *TestSuite) TearDownTest() {
-	b.deleteTopics()
-	time.Sleep(1 * time.Second)
 }
 
 // 测试消费组
@@ -266,7 +259,7 @@ func (b *TestSuite) TestMQConsumer_ConsumerGroup() {
 	}
 	for _, tc := range testcases {
 		b.T().Run(tc.name, func(t *testing.T) {
-			mqm := b.mqCreator.Init()
+			mqm := b.testMq
 			err := mqm.Topic(context.Background(), tc.topic, int(tc.partitions))
 			require.NoError(t, err)
 			p, err := mqm.Producer(tc.topic)
@@ -291,7 +284,7 @@ func (b *TestSuite) TestMQConsumer_ConsumerGroup() {
 				require.NoError(t, err)
 			}
 			time.Sleep(15 * time.Second)
-			err = mqm.Close()
+			err = closeConsumerAndProducer(consumers, []mq.Producer{p})
 			require.NoError(t, err)
 			wg.Wait()
 			assert.ElementsMatch(t, tc.wantVal, genMsg(ans))
@@ -416,7 +409,7 @@ func (b *TestSuite) TestMQConsumer_OrderOfMessagesWithinAPartition() {
 	}
 	for _, tc := range testcases {
 		b.T().Run(tc.name, func(t *testing.T) {
-			mqm := b.mqCreator.Init()
+			mqm := b.testMq
 			err := mqm.Topic(context.Background(), tc.topic, int(tc.partitions))
 			require.NoError(t, err)
 			p, err := mqm.Producer(tc.topic)
@@ -441,7 +434,7 @@ func (b *TestSuite) TestMQConsumer_OrderOfMessagesWithinAPartition() {
 				require.NoError(t, err)
 			}
 			time.Sleep(15 * time.Second)
-			err = mqm.Close()
+			err = closeConsumerAndProducer(consumers, []mq.Producer{p})
 			require.NoError(t, err)
 			wg.Wait()
 			wantMap := getMsgMap(tc.wantVal)
@@ -560,7 +553,7 @@ func (b *TestSuite) TestMQProducer_ProduceWithSpecifiedPartitionID() {
 	}
 	for _, tc := range testcases {
 		b.T().Run(tc.name, func(t *testing.T) {
-			mqm := b.mqCreator.Init()
+			mqm := b.testMq
 			err := mqm.Topic(context.Background(), tc.topic, int(tc.partitions))
 			require.NoError(t, err)
 			p, err := mqm.Producer(tc.topic)
@@ -589,8 +582,7 @@ func (b *TestSuite) TestMQProducer_ProduceWithSpecifiedPartitionID() {
 				require.NoError(t, err)
 			}
 			time.Sleep(15 * time.Second)
-			err = mqm.Close()
-
+			err = closeConsumerAndProducer([]mq.Consumer{c}, []mq.Producer{p})
 			require.NoError(t, err)
 			wg.Wait()
 			assert.ElementsMatch(t, tc.wantVal, genWithPartitionMsg(ans))
@@ -598,11 +590,75 @@ func (b *TestSuite) TestMQProducer_ProduceWithSpecifiedPartitionID() {
 	}
 }
 
-// 测试close后调用各个方法
+// 测试producer调用close
 func (b *TestSuite) TestMQProducer_Close() {
 	t := b.T()
 	topic := "test_topic5"
-	mqm := b.mqCreator.Init()
+	mqm := b.testMq
+	err := mqm.Topic(context.Background(), topic, 4)
+	p, err := mqm.Producer(topic)
+	require.NoError(b.T(), err)
+	errChan := make(chan error, 10)
+	// 开启三个goroutine使用 Produce
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := testProducer(p)
+			if err != nil {
+				errChan <- err
+			}
+		}()
+	}
+	// 开启三个goroutine使用 ProducerWithPartition
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := testProducerWithPartition(p)
+			if err != nil {
+				errChan <- err
+			}
+		}()
+	}
+	err = p.Close()
+	require.NoError(t, err)
+	close(errChan)
+	wg.Wait()
+	errList := make([]error, 0, len(errChan))
+	for val := range errChan {
+		errList = append(errList, val)
+	}
+	for _, e := range errList {
+		assert.Equal(b.T(), mqerr.ErrProducerIsClosed, e)
+	}
+}
+
+// 测试consumer调用close
+func (b *TestSuite) TestMQAndConsumer_Close() {
+	t := b.T()
+	topic := "test_topic6"
+	mqm := b.testMq
+	err := mqm.Topic(context.Background(), topic, 4)
+	require.NoError(t, err)
+	c, err := mqm.Consumer(topic, "1")
+	require.NoError(t, err)
+	// 调用close方法
+	err = c.Close()
+	require.NoError(t, err)
+	// consumer会返回ErrConsumerIsClosed
+	_, err = c.ConsumeChan(context.Background())
+	assert.Equal(t, mqerr.ErrConsumerIsClosed, err)
+	_, err = c.Consume(context.Background())
+	assert.Equal(t, mqerr.ErrConsumerIsClosed, err)
+}
+
+// 测试mq调用close
+func (b *TestSuite) TestMQ_Close() {
+	t := b.T()
+	topic := "test_topic5"
+	mqm := b.testMq
 	err := mqm.Topic(context.Background(), topic, 4)
 	require.NoError(t, err)
 	p, err := mqm.Producer(topic)
@@ -614,13 +670,13 @@ func (b *TestSuite) TestMQProducer_Close() {
 	require.NoError(t, err)
 	// mq会返回ErrMqIsClosed
 	err = mqm.Topic(context.Background(), "test_topic6", 4)
-	assert.Equal(t, mqerr.ErrMqIsClosed, err)
+	assert.Equal(t, mqerr.ErrMQIsClosed, err)
 	_, err = mqm.Producer(topic)
-	assert.Equal(t, mqerr.ErrMqIsClosed, err)
+	assert.Equal(t, mqerr.ErrMQIsClosed, err)
 	_, err = mqm.Consumer(topic, "1")
-	assert.Equal(t, mqerr.ErrMqIsClosed, err)
+	assert.Equal(t, mqerr.ErrMQIsClosed, err)
 	err = mqm.ClearTopic(context.Background(), []string{topic})
-	assert.Equal(t, mqerr.ErrMqIsClosed, err)
+	assert.Equal(t, mqerr.ErrMQIsClosed, err)
 	// producer会返回ErrProducerIsClosed
 	_, err = p.Produce(context.Background(), &mq.Message{})
 	assert.Equal(t, mqerr.ErrProducerIsClosed, err)
@@ -663,7 +719,41 @@ func getMsgMap(msgs []*mq.Message) map[string][]*mq.Message {
 	return wantMap
 }
 
-func TestMq(t *testing.T) {
-	// 测试kafka的实现
-	suite.Run(t, NewBaseSuite(NewKafkaSuite([]string{"127.0.0.1:9092"})))
+func testProducer(p mq.Producer) error {
+	for {
+		_, err := p.Produce(context.Background(), &mq.Message{
+			Value: []byte("1"),
+		})
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func testProducerWithPartition(p mq.Producer) error {
+	for {
+		_, err := p.ProduceWithPartition(context.Background(), &mq.Message{
+			Value: []byte("1"),
+		}, 0)
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func closeConsumerAndProducer(consumers []mq.Consumer, producers []mq.Producer) error {
+	errList := make([]error, 0, len(consumers)+len(producers))
+	for _, c := range consumers {
+		err := c.Close()
+		if err != nil {
+			errList = append(errList, err)
+		}
+	}
+	for _, p := range producers {
+		err := p.Close()
+		if err != nil {
+			errList = append(errList, err)
+		}
+	}
+	return multierr.Combine(errList...)
 }

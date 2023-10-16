@@ -4,7 +4,7 @@ import (
 	"context"
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/ecodeclub/mq-api"
-	"github.com/ecodeclub/mq-api/common"
+	"github.com/ecodeclub/mq-api/kafka/common"
 	"github.com/ecodeclub/mq-api/mqerr"
 	"sync"
 )
@@ -17,9 +17,6 @@ type Producer struct {
 }
 
 func (p *Producer) Produce(ctx context.Context, m *mq.Message) (*mq.ProducerResult, error) {
-	if p.isClosed() {
-		return nil, mqerr.ErrProducerIsClosed
-	}
 	kafkaMsg := &kafka.Message{
 		Value:   m.Value,
 		Key:     m.Key,
@@ -32,9 +29,6 @@ func (p *Producer) Produce(ctx context.Context, m *mq.Message) (*mq.ProducerResu
 }
 
 func (p *Producer) ProduceWithPartition(ctx context.Context, m *mq.Message, partition int32) (*mq.ProducerResult, error) {
-	if p.isClosed() {
-		return nil, mqerr.ErrProducerIsClosed
-	}
 	kafkaMsg := &kafka.Message{
 		Value:   m.Value,
 		Key:     m.Key,
@@ -48,10 +42,7 @@ func (p *Producer) ProduceWithPartition(ctx context.Context, m *mq.Message, part
 }
 
 func (p *Producer) Close() error {
-	p.locker.Lock()
-	defer p.locker.Unlock()
 	p.producer.Close()
-	p.closed = true
 	return nil
 }
 
@@ -59,6 +50,10 @@ func (p *Producer) produce(ctx context.Context, msg *kafka.Message) (*mq.Produce
 	deliveryChan := make(chan kafka.Event)
 	err := p.producer.Produce(msg, deliveryChan)
 	if err != nil {
+		kafkaErr, ok := err.(kafka.Error)
+		if ok && kafkaErr.Code() == kafka.ErrState {
+			return nil, mqerr.ErrProducerIsClosed
+		}
 		return nil, err
 	}
 	// 等待返回的报错
@@ -70,10 +65,4 @@ func (p *Producer) produce(ctx context.Context, msg *kafka.Message) (*mq.Produce
 	}
 
 	return &mq.ProducerResult{}, nil
-}
-
-func (p *Producer) isClosed() bool {
-	p.locker.RLock()
-	defer p.locker.RUnlock()
-	return p.closed
 }

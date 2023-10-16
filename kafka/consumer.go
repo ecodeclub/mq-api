@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/ecodeclub/mq-api"
-	"github.com/ecodeclub/mq-api/common"
+	"github.com/ecodeclub/mq-api/kafka/common"
 	"github.com/ecodeclub/mq-api/mqerr"
 	"log"
 	"sync"
 	"time"
+)
+
+const (
+	ReadTimeout = 100 * time.Millisecond
 )
 
 type Consumer struct {
@@ -25,7 +29,7 @@ type Consumer struct {
 }
 
 func (c *Consumer) Consume(ctx context.Context) (*mq.Message, error) {
-	if c.closed {
+	if c.isClosed() {
 		return nil, mqerr.ErrConsumerIsClosed
 	}
 	select {
@@ -39,8 +43,11 @@ func (c *Consumer) Consume(ctx context.Context) (*mq.Message, error) {
 }
 
 func (c *Consumer) ConsumeChan(ctx context.Context) (<-chan *mq.Message, error) {
-	if c.closed {
+	if c.isClosed() {
 		return nil, mqerr.ErrConsumerIsClosed
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	return c.msgCh, nil
 }
@@ -80,7 +87,6 @@ func (c *Consumer) getMsgFromKafka() {
 				select {
 				case c.msgCh <- msg:
 				case <-c.closeCh:
-					close(c.msgCh)
 					return
 				}
 			} else if !err.(kafka.Error).IsTimeout() {
@@ -88,6 +94,7 @@ func (c *Consumer) getMsgFromKafka() {
 			}
 		}
 	}
+
 }
 
 func (c *Consumer) isClosed() bool {

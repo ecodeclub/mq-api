@@ -40,7 +40,7 @@ func NewMQ(brokers []string) (mq.MQ, error) {
 // ClearTopic 删除topic，仅供测试
 func (m *MQ) ClearTopic(ctx context.Context, topics []string) error {
 	if m.isClosed() {
-		return mqerr.ErrMqIsClosed
+		return mqerr.ErrMQIsClosed
 	}
 	res, err := m.adminClient.DeleteTopics(ctx, topics)
 	if err != nil {
@@ -56,8 +56,10 @@ func (m *MQ) ClearTopic(ctx context.Context, topics []string) error {
 }
 
 func (m *MQ) Topic(ctx context.Context, name string, partitions int) error {
-	if m.isClosed() {
-		return mqerr.ErrMqIsClosed
+	m.locker.Lock()
+	defer m.locker.Unlock()
+	if m.closed == true {
+		return mqerr.ErrMQIsClosed
 	}
 	res, err := m.adminClient.CreateTopics(
 		ctx,
@@ -78,7 +80,7 @@ func (m *MQ) Topic(ctx context.Context, name string, partitions int) error {
 
 func (m *MQ) Producer(topic string) (mq.Producer, error) {
 	if m.isClosed() {
-		return nil, mqerr.ErrMqIsClosed
+		return nil, mqerr.ErrMQIsClosed
 	}
 	p, err := kafka.NewProducer(&kafka.ConfigMap{
 		"bootstrap.servers": strings.Join(m.brokers, ","),
@@ -98,7 +100,7 @@ func (m *MQ) Producer(topic string) (mq.Producer, error) {
 
 func (m *MQ) Consumer(topic string, id string) (mq.Consumer, error) {
 	if m.isClosed() {
-		return nil, mqerr.ErrMqIsClosed
+		return nil, mqerr.ErrMQIsClosed
 	}
 	c, err := kafka.NewConsumer(&kafka.ConfigMap{
 		"bootstrap.servers": strings.Join(m.brokers, ","),
