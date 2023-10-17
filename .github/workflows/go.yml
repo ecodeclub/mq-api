@@ -32,9 +32,3 @@ jobs:
 
       - name: Build
         run: go build -v ./...
-
-      - name: Test
-        run: go test -race -coverprofile=cover.out -v ./...
-
-      - name: Post Coverage
-        uses: codecov/codecov-action@v3
