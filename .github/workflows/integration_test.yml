@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: Integration Test
+name: Integration and E2E Test
 
 on:
   push:
@@ -30,5 +30,8 @@ jobs:
         with:
           go-version: '>=1.21.0'
 
-      - name: Test
-        run: sudo sh ./script/integrate_test.sh
+      - name: Run Integration Test
+        run: sudo sh ./scripts/cicd/integration-testing.sh
+
+      - name: Run E2E Test
+        run: sudo sh ./scripts/cicd/end-to-end-testing.sh
