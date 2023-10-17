@@ -30,8 +30,14 @@ jobs:
         with:
           go-version: '>=1.21.0'
 
+      - name: Unit Test
+        run: go version && sudo sh ./scripts/cicd/unit-testing.sh
+
       - name: Run Integration Test
-        run: make dev_3rd_up && go test -tags=e2e -race -cover -coverprofile=e2e.out -failfast -shuffle=on ./...
+        run: go version && sudo sh ./scripts/cicd/integration-testing.sh
 
       - name: Run E2E Test
-        run: sudo sh ./scripts/cicd/end-to-end-testing.sh
+        run: go version && sudo sh ./scripts/cicd/end-to-end-testing.sh
+
+      - name: Post Coverage
+        uses: codecov/codecov-action@v3
