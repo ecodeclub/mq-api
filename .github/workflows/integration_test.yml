@@ -31,13 +31,13 @@ jobs:
           go-version: '>=1.21.0'
 
       - name: Unit Test
-        run: go version && which go && make ut
+        run: make ut
 
       - name: Run Integration Test
-        run: go version && which go && make it
+        run: make it
 
       - name: Run E2E Test
-        run: go version && which go && make e2e
+        run: make e2e
 
       - name: Post Coverage
         uses: codecov/codecov-action@v3

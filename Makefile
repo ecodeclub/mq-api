@@ -6,7 +6,7 @@ setup:
 	@echo "初始化开发环境......"
 	@find "$(SCRIPTS_PATH)" -type f -name '*.sh' -exec chmod +x {} \;
 	@bash $(SCRIPTS_PATH)/setup/setup.sh
-	@$(MAKE) tidy
+	@make tidy
 
 # 依赖清理
 .PHONY: tidy
@@ -27,14 +27,14 @@ lint:
 # 单元测试
 .PHONY:	ut
 ut:
-	@go version && which go && go test -race -cover -coverprofile=unit.out -failfast -shuffle=on ./...
+	@go test -race -cover -coverprofile=unit.out -failfast -shuffle=on ./...
 
 # 集成测试
 .PHONY: it
 it:
 	@make dev_3rd_down
 	@make dev_3rd_up
-	@go version && which go && go test -tags=integration -race -cover -coverprofile=integration.out -failfast -shuffle=on ./...
+	@go test -tags=integration -race -cover -coverprofile=integration.out -failfast -shuffle=on ./...
 	@make dev_3rd_down
 
 # 端到端测试
@@ -42,7 +42,7 @@ it:
 e2e:
 	@make dev_3rd_down
 	@make dev_3rd_up
-	@go version && which go && go test -tags=e2e -race -cover -coverprofile=e2e.out -failfast -shuffle=on ./...
+	@go test -tags=e2e -race -cover -coverprofile=e2e.out -failfast -shuffle=on ./...
 	@make dev_3rd_down
 
 # 启动本地研发 docker 依赖
@@ -58,8 +58,8 @@ dev_3rd_down:
 check:
 	@echo "\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> 检查阶段 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n"
 	@echo "整理项目依赖中......"
-	@$(MAKE) tidy
+	@make tidy
 	@echo "代码风格检查中......"
-	@$(MAKE) fmt
+	@make fmt
 	@echo "代码静态扫描中......"
-	@$(MAKE) lint
+	@make lint
