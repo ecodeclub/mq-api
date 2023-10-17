@@ -31,7 +31,7 @@ jobs:
           go-version: '>=1.21.0'
 
       - name: Run Integration Test
-        run: go mod tidy && sudo sh ./scripts/cicd/integration-testing.sh
+        run: make dev_3rd_up && go test -tags=e2e -race -cover -coverprofile=e2e.out -failfast -shuffle=on ./...
 
       - name: Run E2E Test
         run: sudo sh ./scripts/cicd/end-to-end-testing.sh
