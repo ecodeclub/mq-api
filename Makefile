@@ -27,14 +27,14 @@ lint:
 # 单元测试
 .PHONY:	ut
 ut:
-	@go version && go test -race -cover -coverprofile=unit.out -failfast -shuffle=on ./...
+	@go version && which go && go test -race -cover -coverprofile=unit.out -failfast -shuffle=on ./...
 
 # 集成测试
 .PHONY: it
 it:
 	@make dev_3rd_down
 	@make dev_3rd_up
-	@go version && go test -tags=integration -race -cover -coverprofile=integration.out -failfast -shuffle=on ./...
+	@go version && which go && go test -tags=integration -race -cover -coverprofile=integration.out -failfast -shuffle=on ./...
 	@make dev_3rd_down
 
 # 端到端测试
@@ -42,7 +42,7 @@ it:
 e2e:
 	@make dev_3rd_down
 	@make dev_3rd_up
-	@go version && go mod tidy && go test -tags=e2e -race -cover -coverprofile=e2e.out -failfast -shuffle=on ./...
+	@go version && which go && go test -tags=e2e -race -cover -coverprofile=e2e.out -failfast -shuffle=on ./...
 	@make dev_3rd_down
 
 # 启动本地研发 docker 依赖

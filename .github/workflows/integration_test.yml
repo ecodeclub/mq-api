@@ -31,13 +31,13 @@ jobs:
           go-version: '>=1.21.0'
 
       - name: Unit Test
-        run: go version && sudo sh ./scripts/cicd/unit-testing.sh
+        run: go version && which go && sudo sh ./scripts/cicd/unit-testing.sh
 
       - name: Run Integration Test
-        run: go version && sudo sh ./scripts/cicd/integration-testing.sh
+        run: go version && which go && sudo sh ./scripts/cicd/integration-testing.sh
 
       - name: Run E2E Test
-        run: go version && sudo sh ./scripts/cicd/end-to-end-testing.sh
+        run: go version && which go && sudo sh ./scripts/cicd/end-to-end-testing.sh
 
       - name: Post Coverage
         uses: codecov/codecov-action@v3
