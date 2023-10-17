@@ -20,31 +20,18 @@
 # This script does not handle file names that contain spaces.
 
 # Pre-push configuration
-remote=$1
-url=$2
-echo >&2 "Try pushing $2 to $1"
 
-TEST="go test ./... -race -cover -failfast"
-LINTER="golangci-lint run"
-
-# Run test and return if failed
-printf "Running go test..."
-$TEST
-RESULT=$?
-if [ $RESULT -ne 0 ]; then
-  echo >&2 "$TEST"
-  echo >&2 "Check code to pass test."
+sh "$(pwd)/scripts/cicd/unit-testing.sh"
+if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# Run linter and return if failed
-printf "Running go linter..."
-$LINTER
-RESULT=$?
-if [ $RESULT -ne 0 ]; then
-  echo >&2 "$LINTER"
-  echo >&2 "Check code to pass linter."
+sh "$(pwd)/scripts/cicd/integration-testing.sh"
+if [ $? -ne 0 ]; then
   exit 1
 fi
 
-exit 0
+sh "$(pwd)/scripts/cicd/end-to-end-testing.sh"
+if [ $? -ne 0 ]; then
+  exit 1
+fi

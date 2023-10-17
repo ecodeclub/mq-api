@@ -16,9 +16,10 @@ package memory
 
 import (
 	"context"
+	"sync"
+
 	"github.com/ecodeclub/ekit/syncx"
 	"github.com/ecodeclub/mq-api"
-	"sync"
 )
 
 type Topic struct {
@@ -29,12 +30,6 @@ type Topic struct {
 }
 
 type topicOption func(topic *Topic)
-
-func WithProducerChannelSize(size int) topicOption {
-	return func(topic *Topic) {
-		topic.produceChan = make(chan *mq.Message, size)
-	}
-}
 
 func (t *Topic) NewConsumer(size int) mq.Consumer {
 	consumerCh := make(chan *mq.Message, size)
@@ -100,7 +95,8 @@ func NewMq() mq.MQ {
 
 func (m *Mq) Consumer(topic string) mq.Consumer {
 	tp, _ := m.topics.LoadOrStore(topic, NewTopic(topic))
-	return tp.NewConsumer(10)
+	const size = 10
+	return tp.NewConsumer(size)
 }
 
 func (m *Mq) Producer(topic string) mq.Producer {
@@ -109,9 +105,10 @@ func (m *Mq) Producer(topic string) mq.Producer {
 }
 
 func NewTopic(name string, opts ...topicOption) *Topic {
+	const i = 1000
 	t := &Topic{
 		Name:        name,
-		produceChan: make(chan *mq.Message, 1000),
+		produceChan: make(chan *mq.Message, i),
 	}
 	for _, opt := range opts {
 		opt(t)

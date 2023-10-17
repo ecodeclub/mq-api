@@ -16,12 +16,13 @@ package memory
 
 import (
 	"context"
-	"github.com/ecodeclub/mq-api"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/suite"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ecodeclub/mq-api"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/suite"
 )
 
 type MemoryMqTestSuite struct {
@@ -34,7 +35,7 @@ func (m *MemoryMqTestSuite) SetupSuite() {
 }
 
 func (m *MemoryMqTestSuite) TestMq() {
-	testcases := []struct {
+	testcases := []*struct {
 		name      string
 		consumers []mq.Consumer
 		producers []mq.Producer
@@ -101,11 +102,11 @@ func (m *MemoryMqTestSuite) TestMq() {
 			for _, a := range ansList {
 				assert.Equal(t, tc.wantValue, a)
 			}
-
 		})
 	}
 }
 
 func TestMq(t *testing.T) {
+	t.Parallel()
 	suite.Run(t, &MemoryMqTestSuite{})
 }
