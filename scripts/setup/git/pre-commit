@@ -20,12 +20,17 @@
 
 # Pre-commit configuration
 
-RESULT=$(make check)
-printf "执行检查中...\n"
-
-if [ -n "$RESULT" ]; then
-  echo >&2 "[ERROR]: 有文件发生变更，请将变更文件添加到本次提交中"
+sh "$(pwd)/scripts/cicd/3rd-dependency-check.sh"
+if [ $? -ne 0 ]; then
   exit 1
 fi
 
-exit 0
+sh "$(pwd)/scripts/cicd/code-style-check.sh"
+if [ $? -ne 0 ]; then
+  exit 1
+fi
+
+sh "$(pwd)/scripts/cicd/code-static-check.sh"
+if [ $? -ne 0 ]; then
+  exit 1
+fi
