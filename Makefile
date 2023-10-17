@@ -16,8 +16,8 @@ tidy:
 # 代码风格
 .PHONY: fmt
 fmt:
-	@goimports -l -w $$(find . -type f -name '*.go' -not -path "./.idea/*" -not -path "./cmd/monolithic/ioc/wire_gen.go")
-	@gofumpt -l -w $$(find . -type f -name '*.go' -not -path "./.idea/*" -not -path "./cmd/monolithic/ioc/wire_gen.go")
+	@goimports -l -w $$(find . -type f -name '*.go' -not -path "./.idea/*")
+	@gofumpt -l -w $$(find . -type f -name '*.go' -not -path "./.idea/*")
 
 # 静态扫描
 .PHONY:	lint
