@@ -2,132 +2,129 @@ package kafka
 
 import (
 	"context"
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/mqerr"
+	"github.com/pkg/errors"
+	"github.com/segmentio/kafka-go"
 	"go.uber.org/multierr"
-	"strings"
+	"net"
+	"strconv"
 	"sync"
 )
 
 // 先默认1000
 const msgChannelSize = 1000
+const defaultReplicationFactor = 1
 
 type MQ struct {
 	// 用于创建topic
-	adminClient *kafka.AdminClient
-	brokers     []string
-	locker      sync.RWMutex
-	closed      bool
+	address           []string
+	conn              *kafka.Conn
+	controllerConn    *kafka.Conn
+	locker            sync.RWMutex
+	closed            bool
+	replicationFactor int
 	// 方便释放资源
 	producers []mq.Producer
 	consumers []mq.Consumer
 }
 
-func NewMQ(brokers []string) (mq.MQ, error) {
-	a, err := kafka.NewAdminClient(&kafka.ConfigMap{
-		"bootstrap.servers": strings.Join(brokers, ","),
-	})
+func NewMQ(network string, address []string) (mq.MQ, error) {
+	conn, err := kafka.Dial(network, address[0])
+	if err != nil {
+		return nil, err
+	}
+	// 获取Kafka集群的控制器
+	controller, err := conn.Controller()
+	if err != nil {
+		return nil, err
+	}
+	// 与控制器建立连接
+	var controllerConn *kafka.Conn
+	controllerConn, err = kafka.Dial("tcp", net.JoinHostPort(controller.Host, strconv.Itoa(controller.Port)))
 	if err != nil {
 		return nil, err
 	}
 	return &MQ{
-		adminClient: a,
-		brokers:     brokers,
+		address:        address,
+		conn:           conn,
+		controllerConn: controllerConn,
 	}, nil
 }
 
-// ClearTopic 删除topic，仅供测试
+// ClearTopic 删除topic
 func (m *MQ) ClearTopic(ctx context.Context, topics []string) error {
-	if m.isClosed() {
-		return mqerr.ErrMQIsClosed
+	m.locker.Lock()
+	defer m.locker.Unlock()
+	if m.closed {
+		return errors.Wrap(mqerr.ErrMQIsClosed, "kafka: ")
 	}
-	res, err := m.adminClient.DeleteTopics(ctx, topics)
-	if err != nil {
-		return err
+	err := m.controllerConn.DeleteTopics(topics...)
+	if err.(kafka.Error) == kafka.UnknownTopicOrPartition {
+		return nil
 	}
-	errList := make([]error, 0, len(res))
-	for _, r := range res {
-		if r.Error.Code() != kafka.ErrUnknownTopicOrPart && r.Error.Code() != kafka.ErrNoError {
-			errList = append(errList, r.Error)
-		}
-	}
-	return multierr.Combine(errList...)
+	return err
 }
 
 func (m *MQ) Topic(ctx context.Context, name string, partitions int) error {
 	m.locker.Lock()
 	defer m.locker.Unlock()
-	if m.closed == true {
-		return mqerr.ErrMQIsClosed
+	if m.closed {
+		return errors.Wrap(mqerr.ErrMQIsClosed, "kafka: ")
 	}
-	res, err := m.adminClient.CreateTopics(
-		ctx,
-		[]kafka.TopicSpecification{
-			{
-				Topic:         name,
-				NumPartitions: partitions,
-			},
+	topicConfigs := []kafka.TopicConfig{
+		{
+			Topic:             name,
+			NumPartitions:     partitions,
+			ReplicationFactor: defaultReplicationFactor,
 		},
-		kafka.SetAdminOperationTimeout(0),
-	)
-	if res[0].Error.Code() != 0 {
-		return res[0].Error
 	}
-	return err
-
+	return m.controllerConn.CreateTopics(topicConfigs...)
 }
 
 func (m *MQ) Producer(topic string) (mq.Producer, error) {
 	if m.isClosed() {
 		return nil, mqerr.ErrMQIsClosed
 	}
-	p, err := kafka.NewProducer(&kafka.ConfigMap{
-		"bootstrap.servers": strings.Join(m.brokers, ","),
-	})
-	if err != nil {
-		return nil, err
+	w := &kafka.Writer{
+		Addr:     kafka.TCP(m.address...),
+		Topic:    topic,
+		Balancer: &kafka.LeastBytes{},
 	}
-	customProducer := &Producer{
+	p := &Producer{
 		topic:    topic,
-		producer: p,
+		producer: w,
 	}
 	m.locker.Lock()
-	m.producers = append(m.producers, customProducer)
+	m.producers = append(m.producers, p)
 	m.locker.Unlock()
-	return customProducer, nil
+	return p, nil
 }
 
-func (m *MQ) Consumer(topic string, id string) (mq.Consumer, error) {
+func (m *MQ) Consumer(topic string, groupID string) (mq.Consumer, error) {
 	if m.isClosed() {
-		return nil, mqerr.ErrMQIsClosed
+		return nil, errors.Wrap(mqerr.ErrMQIsClosed, "kafka: ")
 	}
-	c, err := kafka.NewConsumer(&kafka.ConfigMap{
-		"bootstrap.servers": strings.Join(m.brokers, ","),
-		"group.id":          id,
-		"auto.offset.reset": "earliest",
+	r := kafka.NewReader(kafka.ReaderConfig{
+		Brokers: m.address,
+		Topic:   topic,
+		GroupID: groupID,
 	})
-	if err != nil {
-		return nil, err
-	}
-	err = c.SubscribeTopics([]string{topic}, nil)
-	if err != nil {
-		return nil, err
-	}
+	closeCh := make(chan struct{})
 	msgCh := make(chan *mq.Message, msgChannelSize)
-	customConsumer := &Consumer{
-		id:       id,
+	c := &Consumer{
 		topic:    topic,
-		consumer: c,
-		closeCh:  make(chan struct{}),
+		id:       groupID,
+		closeCh:  closeCh,
 		msgCh:    msgCh,
+		consumer: r,
 	}
 	m.locker.Lock()
-	m.consumers = append(m.consumers, customConsumer)
+	m.consumers = append(m.consumers, c)
 	m.locker.Unlock()
+	go c.getMsgFromKafka()
 
-	go customConsumer.getMsgFromKafka()
-	return customConsumer, nil
+	return c, nil
 }
 
 func (m *MQ) Close() error {
@@ -147,7 +144,7 @@ func (m *MQ) Close() error {
 		}
 	}
 	m.closed = true
-	m.adminClient.Close()
+
 	return multierr.Combine(errorList...)
 }
 

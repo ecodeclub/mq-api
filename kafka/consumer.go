@@ -2,11 +2,12 @@ package kafka
 
 import (
 	"context"
-	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"errors"
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/kafka/common"
 	"github.com/ecodeclub/mq-api/mqerr"
+	"github.com/segmentio/kafka-go"
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -22,7 +23,7 @@ type Consumer struct {
 	// 负责关闭开启的goroutine
 	closeCh  chan struct{}
 	closed   bool
-	consumer *kafka.Consumer
+	consumer *kafka.Reader
 	once     sync.Once
 	locker   sync.RWMutex
 	msgCh    chan *mq.Message
@@ -55,6 +56,7 @@ func (c *Consumer) ConsumeChan(ctx context.Context) (<-chan *mq.Message, error) 
 func (c *Consumer) Close() error {
 	var err error
 	c.once.Do(func() {
+		err = c.consumer.Close()
 		close(c.closeCh)
 	})
 	c.locker.Lock()
@@ -66,32 +68,28 @@ func (c *Consumer) Close() error {
 // getMsgFromKafka 完成持续从kafka内获取数据
 func (c *Consumer) getMsgFromKafka() {
 	defer func() {
-		c.consumer.Close()
 		close(c.msgCh)
 	}()
 	for {
+		ctx, cancel := context.WithTimeout(context.Background(), ReadTimeout)
+		m, err := c.consumer.ReadMessage(ctx)
+		cancel()
+		if err != nil {
+			switch {
+			case errors.Is(err, context.DeadlineExceeded):
+				continue
+			case errors.Is(err, io.EOF):
+				return
+			default:
+				log.Printf("读取消息失败: %v", err)
+				continue
+			}
+		}
+		msg := common.ConvertToMqMsg(m)
 		select {
+		case c.msgCh <- msg:
 		case <-c.closeCh:
 			return
-		default:
-			m, err := c.consumer.ReadMessage(100 * time.Millisecond)
-			if err == nil {
-				msg := &mq.Message{
-					Value:       m.Value,
-					Key:         m.Key,
-					Header:      common.ConvertHeaderSliceToMap(m.Headers),
-					Topic:       *m.TopicPartition.Topic,
-					PartitionID: int64(m.TopicPartition.Partition),
-					Offset:      int64(m.TopicPartition.Offset),
-				}
-				select {
-				case c.msgCh <- msg:
-				case <-c.closeCh:
-					return
-				}
-			} else if !err.(kafka.Error).IsTimeout() {
-				log.Println(fmt.Errorf("消息接受失败 %v", err))
-			}
 		}
 	}
 

@@ -1,29 +1,33 @@
 package common
 
 import (
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/ecodeclub/mq-api"
+	"github.com/segmentio/kafka-go"
 )
 
-func ConvertHeaderSliceToMap(headers []kafka.Header) mq.Header {
-	headerMap := mq.Header{}
-	for _, header := range headers {
-		key := header.Key
-		value := string(header.Value)
-		headerMap[key] = value
+func ConvertToMqMsg(kafkaMsg kafka.Message) *mq.Message {
+	header := mq.Header{}
+	for _, h := range kafkaMsg.Headers {
+		header[h.Key] = string(h.Value)
 	}
 
-	return headerMap
+	return &mq.Message{
+		Key:         kafkaMsg.Key,
+		Value:       kafkaMsg.Value,
+		Topic:       kafkaMsg.Topic,
+		Header:      header,
+		PartitionID: int64(kafkaMsg.Partition),
+		Offset:      kafkaMsg.Offset,
+	}
 }
 
-func ConvertHeaderMap(headerMap mq.Header) []kafka.Header {
-	headers := make([]kafka.Header, 0, len(headerMap))
-	for key, value := range headerMap {
-		header := kafka.Header{
+func ConvertToKafkaHeader(header mq.Header) []kafka.Header {
+	h := make([]kafka.Header, 0, len(header))
+	for key, val := range header {
+		h = append(h, kafka.Header{
 			Key:   key,
-			Value: []byte(value),
-		}
-		headers = append(headers, header)
+			Value: []byte(val),
+		})
 	}
-	return headers
+	return h
 }

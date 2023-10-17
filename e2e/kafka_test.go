@@ -8,7 +8,7 @@ import (
 )
 
 func TestMq(t *testing.T) {
-	q, err := kafka.NewMQ([]string{"127.0.0.1:9092"})
+	q, err := kafka.NewMQ("tcp", []string{"127.0.0.1:9092"})
 	require.NoError(t, err)
 	suite.Run(t, NewBaseSuite(q))
 }

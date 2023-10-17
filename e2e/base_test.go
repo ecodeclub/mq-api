@@ -644,6 +644,7 @@ func (b *TestSuite) TestMQAndConsumer_Close() {
 	require.NoError(t, err)
 	c, err := mqm.Consumer(topic, "1")
 	require.NoError(t, err)
+	time.Sleep(3 * time.Second)
 	// 调用close方法
 	err = c.Close()
 	require.NoError(t, err)
@@ -652,6 +653,7 @@ func (b *TestSuite) TestMQAndConsumer_Close() {
 	assert.Equal(t, mqerr.ErrConsumerIsClosed, err)
 	_, err = c.Consume(context.Background())
 	assert.Equal(t, mqerr.ErrConsumerIsClosed, err)
+	time.Sleep(3 * time.Second)
 }
 
 // 测试mq调用close
