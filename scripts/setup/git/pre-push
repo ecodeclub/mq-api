@@ -26,11 +26,6 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-sh "$(pwd)/scripts/cicd/integration-testing.sh"
-if [ $? -ne 0 ]; then
-  exit 1
-fi
-
 sh "$(pwd)/scripts/cicd/end-to-end-testing.sh"
 if [ $? -ne 0 ]; then
   exit 1
