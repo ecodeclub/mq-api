@@ -42,7 +42,7 @@ it:
 e2e:
 	@make dev_3rd_down
 	@make dev_3rd_up
-	@go test -tags=e2e -race -cover -coverprofile=e2e.out -failfast -shuffle=on ./...
+	@go version && go mod tidy && go test -tags=e2e -race -cover -coverprofile=e2e.out -failfast -shuffle=on ./...
 	@make dev_3rd_down
 
 # 启动本地研发 docker 依赖
