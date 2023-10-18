@@ -18,6 +18,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -55,13 +56,12 @@ func NewBaseSuite(mq MqCreator, testMq mq.MQ) *TestSuite {
 }
 
 func (b *TestSuite) SetupSuite() {
-	time.Sleep(3 * time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	if err := b.testMqCreator.Ping(ctx); err != nil {
-		panic("第三方依赖连接不上")
+
+		panic(fmt.Sprintf("第三方依赖连接不上 %v", err))
 	}
 	cancel()
-
 }
 
 // 测试消费组
