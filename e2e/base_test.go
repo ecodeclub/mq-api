@@ -55,12 +55,13 @@ func NewBaseSuite(mq MqCreator, testMq mq.MQ) *TestSuite {
 }
 
 func (b *TestSuite) SetupSuite() {
+	time.Sleep(3 * time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	if err := b.testMqCreator.Ping(ctx); err != nil {
 		panic("第三方依赖连接不上")
 	}
 	cancel()
-	time.Sleep(1 * time.Second)
+
 }
 
 // 测试消费组
