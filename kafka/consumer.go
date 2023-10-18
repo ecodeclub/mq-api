@@ -17,14 +17,15 @@ package kafka
 import (
 	"context"
 	"errors"
-	"github.com/ecodeclub/mq-api"
-	"github.com/ecodeclub/mq-api/kafka/common"
-	"github.com/ecodeclub/mq-api/mqerr"
-	"github.com/segmentio/kafka-go"
 	"io"
 	"log"
 	"sync"
 	"time"
+
+	"github.com/ecodeclub/mq-api"
+	"github.com/ecodeclub/mq-api/kafka/common"
+	"github.com/ecodeclub/mq-api/mqerr"
+	"github.com/segmentio/kafka-go"
 )
 
 const (
@@ -106,7 +107,6 @@ func (c *Consumer) getMsgFromKafka() {
 			return
 		}
 	}
-
 }
 
 func (c *Consumer) isClosed() bool {

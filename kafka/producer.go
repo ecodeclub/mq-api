@@ -16,15 +16,16 @@ package kafka
 
 import (
 	"context"
+	"io"
+	"sync"
+
 	"github.com/pkg/errors"
 	"go.uber.org/multierr"
-	"sync"
 
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/kafka/common"
 	"github.com/ecodeclub/mq-api/mqerr"
 	"github.com/segmentio/kafka-go"
-	"io"
 )
 
 type Producer struct {
@@ -50,13 +51,13 @@ func (p *Producer) Produce(ctx context.Context, m *mq.Message) (*mq.ProducerResu
 	return &mq.ProducerResult{}, p.producer.WriteMessages(ctx, kafkaMsg)
 }
 
-func (p *Producer) ProduceWithPartition(ctx context.Context, m *mq.Message, partitionId int32) (*mq.ProducerResult, error) {
+func (p *Producer) ProduceWithPartition(ctx context.Context, m *mq.Message, partitionID int32) (*mq.ProducerResult, error) {
 	p.locker.Lock()
 	defer p.locker.Unlock()
 	if p.closed {
 		return nil, errors.Wrap(mqerr.ErrProducerIsClosed, "kafka: ")
 	}
-	conn, err := p.getPartitionConn(ctx, partitionId)
+	conn, err := p.getPartitionConn(ctx, partitionID)
 	if err != nil {
 		return nil, err
 	}
@@ -93,15 +94,15 @@ func (p *Producer) Close() error {
 	return multierr.Combine(errList...)
 }
 
-func (p *Producer) getPartitionConn(ctx context.Context, partitionId int32) (*kafka.Conn, error) {
-	conn, ok := p.partitionConns[partitionId]
+func (p *Producer) getPartitionConn(ctx context.Context, partitionID int32) (*kafka.Conn, error) {
+	conn, ok := p.partitionConns[partitionID]
 	if ok {
 		return conn, nil
 	}
-	conn, err := kafka.DialLeader(ctx, "tcp", p.address, p.topic, int(partitionId))
+	conn, err := kafka.DialLeader(ctx, "tcp", p.address, p.topic, int(partitionID))
 	if err != nil {
 		return nil, err
 	}
-	p.partitionConns[partitionId] = conn
+	p.partitionConns[partitionID] = conn
 	return conn, nil
 }

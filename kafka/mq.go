@@ -16,14 +16,15 @@ package kafka
 
 import (
 	"context"
+	"net"
+	"strconv"
+	"sync"
+
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/mqerr"
 	"github.com/pkg/errors"
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/multierr"
-	"net"
-	"strconv"
-	"sync"
 )
 
 // consumerChannel先默认1000
@@ -31,6 +32,9 @@ const msgChannelSize = 1000
 
 // 默认分区副本数
 const defaultReplicationFactor = 1
+
+// 默认分区连接数
+const defaultPartitionConn = 16
 
 type MQ struct {
 	// 用于创建topic
@@ -62,21 +66,26 @@ func NewMQ(network string, address []string) (mq.MQ, error) {
 		return nil, err
 	}
 	return &MQ{
-		address:        address,
-		conn:           conn,
-		controllerConn: controllerConn,
+		address:           address,
+		conn:              conn,
+		controllerConn:    controllerConn,
+		replicationFactor: defaultReplicationFactor,
 	}, nil
 }
 
-// ClearTopic 删除topic
+// DeleteTopics 删除topic
 func (m *MQ) DeleteTopics(ctx context.Context, topics []string) error {
 	m.locker.Lock()
 	defer m.locker.Unlock()
 	if m.closed {
 		return errors.Wrap(mqerr.ErrMQIsClosed, "kafka: ")
 	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	err := m.controllerConn.DeleteTopics(topics...)
-	if err.(kafka.Error) == kafka.UnknownTopicOrPartition {
+	var val kafka.Error
+	if errors.As(err, &val) && val == kafka.UnknownTopicOrPartition {
 		return nil
 	}
 	return err
@@ -88,11 +97,14 @@ func (m *MQ) Topic(ctx context.Context, name string, partitions int) error {
 	if m.closed {
 		return errors.Wrap(mqerr.ErrMQIsClosed, "kafka: ")
 	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	topicConfigs := []kafka.TopicConfig{
 		{
 			Topic:             name,
 			NumPartitions:     partitions,
-			ReplicationFactor: defaultReplicationFactor,
+			ReplicationFactor: m.replicationFactor,
 		},
 	}
 	return m.controllerConn.CreateTopics(topicConfigs...)
@@ -110,7 +122,7 @@ func (m *MQ) Producer(topic string) (mq.Producer, error) {
 	p := &Producer{
 		topic:          topic,
 		producer:       w,
-		partitionConns: make(map[int32]*kafka.Conn, 16),
+		partitionConns: make(map[int32]*kafka.Conn, defaultPartitionConn),
 	}
 	m.locker.Lock()
 	m.producers = append(m.producers, p)
@@ -118,7 +130,7 @@ func (m *MQ) Producer(topic string) (mq.Producer, error) {
 	return p, nil
 }
 
-func (m *MQ) Consumer(topic string, groupID string) (mq.Consumer, error) {
+func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 	if m.isClosed() {
 		return nil, errors.Wrap(mqerr.ErrMQIsClosed, "kafka: ")
 	}

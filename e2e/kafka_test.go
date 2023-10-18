@@ -18,11 +18,12 @@ package e2e
 
 import (
 	"context"
+	"testing"
+
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/kafka"
 	kafkago "github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/suite"
-	"testing"
 )
 
 func TestKafka(t *testing.T) {
@@ -51,8 +52,9 @@ func (k KafkaTestSuite) Init() mq.MQ {
 
 func (k KafkaTestSuite) Ping(ctx context.Context) error {
 	w := kafkago.Writer{
-		Addr:  kafkago.TCP(k.address...),
-		Topic: "topic-A",
+		Addr:                   kafkago.TCP(k.address...),
+		Topic:                  "topic-A",
+		AllowAutoTopicCreation: true,
 	}
 	err := w.WriteMessages(ctx, kafkago.Message{
 		Key:   []byte("1"),

@@ -32,7 +32,6 @@ func ConvertToMqMsg(kafkaMsg kafka.Message) *mq.Message {
 		PartitionID: int64(kafkaMsg.Partition),
 		Offset:      kafkaMsg.Offset,
 	}
-
 }
 
 func ConvertToKafkaHeader(header mq.Header) []kafka.Header {

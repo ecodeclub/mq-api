@@ -18,6 +18,10 @@ package e2e
 
 import (
 	"context"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/mqerr"
 	"github.com/pkg/errors"
@@ -25,9 +29,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/multierr"
-	"sync"
-	"testing"
-	"time"
 )
 
 type MqCreator interface {
@@ -620,7 +621,7 @@ func (b *TestSuite) TestMQProducer_Close() {
 		}()
 	}
 	// 开启三个goroutine使用 ProducerWithPartition
-	//0
+	// 0
 	err = p.Close()
 	require.NoError(t, err)
 	wg.Wait()
@@ -691,7 +692,7 @@ func (b *TestSuite) TestMQ_Close() {
 }
 
 func genMsg(msgs []*mq.Message, hasPartitionID bool) []*mq.Message {
-	for index, _ := range msgs {
+	for index := range msgs {
 		if !hasPartitionID {
 			msgs[index].PartitionID = 0
 		}
@@ -702,7 +703,7 @@ func genMsg(msgs []*mq.Message, hasPartitionID bool) []*mq.Message {
 }
 
 func genWithPartitionMsg(msgs []*mq.Message) []*mq.Message {
-	for index, _ := range msgs {
+	for index := range msgs {
 		msgs[index].Offset = 0
 		msgs[index].Header = nil
 	}

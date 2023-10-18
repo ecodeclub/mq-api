@@ -32,8 +32,7 @@ type Message struct {
 	Offset int64
 }
 
-type ProducerResult struct {
-}
+type ProducerResult struct{}
 
 // Producer 生产者的抽象
 type Producer interface {
