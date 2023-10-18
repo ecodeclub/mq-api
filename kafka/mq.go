@@ -1,3 +1,17 @@
+// Copyright 2021 ecodeclub
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package kafka
 
 import (
@@ -12,8 +26,10 @@ import (
 	"sync"
 )
 
-// 先默认1000
+// consumerChannel先默认1000
 const msgChannelSize = 1000
+
+// 默认分区副本数
 const defaultReplicationFactor = 1
 
 type MQ struct {
@@ -53,7 +69,7 @@ func NewMQ(network string, address []string) (mq.MQ, error) {
 }
 
 // ClearTopic 删除topic
-func (m *MQ) ClearTopic(ctx context.Context, topics []string) error {
+func (m *MQ) DeleteTopics(ctx context.Context, topics []string) error {
 	m.locker.Lock()
 	defer m.locker.Unlock()
 	if m.closed {
@@ -89,11 +105,12 @@ func (m *MQ) Producer(topic string) (mq.Producer, error) {
 	w := &kafka.Writer{
 		Addr:     kafka.TCP(m.address...),
 		Topic:    topic,
-		Balancer: &kafka.LeastBytes{},
+		Balancer: &kafka.Hash{},
 	}
 	p := &Producer{
-		topic:    topic,
-		producer: w,
+		topic:          topic,
+		producer:       w,
+		partitionConns: make(map[int32]*kafka.Conn, 16),
 	}
 	m.locker.Lock()
 	m.producers = append(m.producers, p)

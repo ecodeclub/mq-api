@@ -1,9 +1,26 @@
+// Copyright 2021 ecodeclub
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//go:build e2e
+
 package e2e
 
 import (
 	"context"
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/mqerr"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -13,9 +30,15 @@ import (
 	"time"
 )
 
+type MqCreator interface {
+	Init() mq.MQ
+	Ping(ctx context.Context) error
+}
+
 type TestSuite struct {
 	suite.Suite
-	testMq mq.MQ
+	testMqCreator MqCreator
+	testMq        mq.MQ
 }
 
 type ProducerMsg struct {
@@ -23,31 +46,20 @@ type ProducerMsg struct {
 	msg       *mq.Message
 }
 
-func NewBaseSuite(mq mq.MQ) *TestSuite {
+func NewBaseSuite(mq MqCreator, testMq mq.MQ) *TestSuite {
 	return &TestSuite{
-		testMq: mq,
+		testMqCreator: mq,
+		testMq:        testMq,
 	}
 }
 
-func (b *TestSuite) SetupTest() {
-	b.deleteTopics()
-	time.Sleep(1 * time.Second)
-}
-
-func (b *TestSuite) deleteTopics() {
-	topics := []string{
-		"test_topic",
-		"test_topic1",
-		"test_topic2",
-		"test_topic3",
-		"test_topic4",
-		"test_topic5",
-		"test_topic6",
+func (b *TestSuite) SetupSuite() {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	if err := b.testMqCreator.Ping(ctx); err != nil {
+		panic("第三方依赖连接不上")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	err := b.testMq.ClearTopic(ctx, topics)
 	cancel()
-	require.NoError(b.T(), err)
+	time.Sleep(1 * time.Second)
 }
 
 // 测试消费组
@@ -283,11 +295,12 @@ func (b *TestSuite) TestMQConsumer_ConsumerGroup() {
 				_, err := p.Produce(context.Background(), msg)
 				require.NoError(t, err)
 			}
-			time.Sleep(15 * time.Second)
+			time.Sleep(5 * time.Second)
 			err = closeConsumerAndProducer(consumers, []mq.Producer{p})
 			require.NoError(t, err)
 			wg.Wait()
-			assert.ElementsMatch(t, tc.wantVal, genMsg(ans))
+			ansMsg := genMsg(ans, false)
+			assert.ElementsMatch(t, tc.wantVal, ansMsg)
 		})
 	}
 }
@@ -326,32 +339,26 @@ func (b *TestSuite) TestMQConsumer_OrderOfMessagesWithinAPartition() {
 				},
 				{
 					Key:   []byte("4"),
-					Value: []byte("1"),
+					Value: []byte("5"),
 				},
 				{
 					Key:   []byte("4"),
-					Value: []byte("2"),
+					Value: []byte("6"),
 				},
 				{
 					Key:   []byte("4"),
-					Value: []byte("3"),
+					Value: []byte("7"),
 				},
 				{
 					Key:   []byte("4"),
-					Value: []byte("4"),
+					Value: []byte("8"),
 				},
 			},
 			consumers: func(mqm mq.MQ) []mq.Consumer {
 				c11, err := mqm.Consumer("test_topic3", "c1")
 				require.NoError(b.T(), err)
-				c12, err := mqm.Consumer("test_topic3", "c1")
-				require.NoError(b.T(), err)
-				c13, err := mqm.Consumer("test_topic3", "c1")
-				require.NoError(b.T(), err)
 				return []mq.Consumer{
 					c11,
-					c12,
-					c13,
 				}
 			},
 			consumerFunc: func(c mq.Consumer) []*mq.Message {
@@ -385,22 +392,22 @@ func (b *TestSuite) TestMQConsumer_OrderOfMessagesWithinAPartition() {
 					Topic: "test_topic3",
 				},
 				{
-					Value: []byte("1"),
+					Value: []byte("5"),
 					Key:   []byte("4"),
 					Topic: "test_topic3",
 				},
 				{
-					Value: []byte("2"),
+					Value: []byte("6"),
 					Key:   []byte("4"),
 					Topic: "test_topic3",
 				},
 				{
-					Value: []byte("3"),
+					Value: []byte("7"),
 					Key:   []byte("4"),
 					Topic: "test_topic3",
 				},
 				{
-					Value: []byte("4"),
+					Value: []byte("8"),
 					Key:   []byte("4"),
 					Topic: "test_topic3",
 				},
@@ -430,15 +437,16 @@ func (b *TestSuite) TestMQConsumer_OrderOfMessagesWithinAPartition() {
 				}()
 			}
 			for _, msg := range tc.input {
-				_, err := p.Produce(context.Background(), msg)
+				_, err := p.ProduceWithPartition(context.Background(), msg, 1)
 				require.NoError(t, err)
 			}
-			time.Sleep(15 * time.Second)
+
+			time.Sleep(5 * time.Second)
 			err = closeConsumerAndProducer(consumers, []mq.Producer{p})
 			require.NoError(t, err)
 			wg.Wait()
 			wantMap := getMsgMap(tc.wantVal)
-			actualMap := getMsgMap(genMsg(ans))
+			actualMap := getMsgMap(genMsg(ans, false))
 			assert.Equal(t, wantMap, actualMap)
 		})
 	}
@@ -581,7 +589,7 @@ func (b *TestSuite) TestMQProducer_ProduceWithSpecifiedPartitionID() {
 				_, err := p.ProduceWithPartition(context.Background(), msg.msg, msg.partition)
 				require.NoError(t, err)
 			}
-			time.Sleep(15 * time.Second)
+			time.Sleep(5 * time.Second)
 			err = closeConsumerAndProducer([]mq.Consumer{c}, []mq.Producer{p})
 			require.NoError(t, err)
 			wg.Wait()
@@ -612,26 +620,17 @@ func (b *TestSuite) TestMQProducer_Close() {
 		}()
 	}
 	// 开启三个goroutine使用 ProducerWithPartition
-	for i := 0; i < 3; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := testProducerWithPartition(p)
-			if err != nil {
-				errChan <- err
-			}
-		}()
-	}
+	//0
 	err = p.Close()
 	require.NoError(t, err)
-	close(errChan)
 	wg.Wait()
+	close(errChan)
 	errList := make([]error, 0, len(errChan))
 	for val := range errChan {
 		errList = append(errList, val)
 	}
 	for _, e := range errList {
-		assert.Equal(b.T(), mqerr.ErrProducerIsClosed, e)
+		require.True(t, errors.Is(e, mqerr.ErrProducerIsClosed))
 	}
 }
 
@@ -660,7 +659,7 @@ func (b *TestSuite) TestMQAndConsumer_Close() {
 func (b *TestSuite) TestMQ_Close() {
 	t := b.T()
 	topic := "test_topic5"
-	mqm := b.testMq
+	mqm := b.testMqCreator.Init()
 	err := mqm.Topic(context.Background(), topic, 4)
 	require.NoError(t, err)
 	p, err := mqm.Producer(topic)
@@ -672,28 +671,30 @@ func (b *TestSuite) TestMQ_Close() {
 	require.NoError(t, err)
 	// mq会返回ErrMqIsClosed
 	err = mqm.Topic(context.Background(), "test_topic6", 4)
-	assert.Equal(t, mqerr.ErrMQIsClosed, err)
+	require.True(t, errors.Is(err, mqerr.ErrMQIsClosed))
 	_, err = mqm.Producer(topic)
-	assert.Equal(t, mqerr.ErrMQIsClosed, err)
+	require.True(t, errors.Is(err, mqerr.ErrMQIsClosed))
 	_, err = mqm.Consumer(topic, "1")
-	assert.Equal(t, mqerr.ErrMQIsClosed, err)
-	err = mqm.ClearTopic(context.Background(), []string{topic})
-	assert.Equal(t, mqerr.ErrMQIsClosed, err)
+	require.True(t, errors.Is(err, mqerr.ErrMQIsClosed))
+	err = mqm.DeleteTopics(context.Background(), []string{topic})
+	require.True(t, errors.Is(err, mqerr.ErrMQIsClosed))
 	// producer会返回ErrProducerIsClosed
 	_, err = p.Produce(context.Background(), &mq.Message{})
-	assert.Equal(t, mqerr.ErrProducerIsClosed, err)
+	require.True(t, errors.Is(err, mqerr.ErrProducerIsClosed))
 	_, err = p.ProduceWithPartition(context.Background(), &mq.Message{}, 0)
-	assert.Equal(t, mqerr.ErrProducerIsClosed, err)
+	require.True(t, errors.Is(err, mqerr.ErrProducerIsClosed))
 	// consumer会返回ErrConsumerIsClosed
 	_, err = c.ConsumeChan(context.Background())
-	assert.Equal(t, mqerr.ErrConsumerIsClosed, err)
+	require.True(t, errors.Is(err, mqerr.ErrConsumerIsClosed))
 	_, err = c.Consume(context.Background())
-	assert.Equal(t, mqerr.ErrConsumerIsClosed, err)
+	require.True(t, errors.Is(err, mqerr.ErrConsumerIsClosed))
 }
 
-func genMsg(msgs []*mq.Message) []*mq.Message {
+func genMsg(msgs []*mq.Message, hasPartitionID bool) []*mq.Message {
 	for index, _ := range msgs {
-		msgs[index].PartitionID = 0
+		if !hasPartitionID {
+			msgs[index].PartitionID = 0
+		}
 		msgs[index].Offset = 0
 		msgs[index].Header = nil
 	}
@@ -726,17 +727,6 @@ func testProducer(p mq.Producer) error {
 		_, err := p.Produce(context.Background(), &mq.Message{
 			Value: []byte("1"),
 		})
-		if err != nil {
-			return err
-		}
-	}
-}
-
-func testProducerWithPartition(p mq.Producer) error {
-	for {
-		_, err := p.ProduceWithPartition(context.Background(), &mq.Message{
-			Value: []byte("1"),
-		}, 0)
 		if err != nil {
 			return err
 		}

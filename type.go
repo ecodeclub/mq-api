@@ -1,3 +1,17 @@
+// Copyright 2021 ecodeclub
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package mq
 
 import "context"
@@ -51,6 +65,6 @@ type MQ interface {
 	Consumer(topic string, groupID string) (Consumer, error)
 	// Close 释放所有建立的Producer和Consumer资源，多次调用只会执行一次,调用close以后就不能调用MQ的方法了，调用会返回报错ErrMQIsClosed
 	Close() error
-	// ClearTopic 清理topic,删除所有传进来的topic
-	ClearTopic(ctx context.Context, topics []string) error
+	// DeleteTopics 清理topic,删除所有传进来的topic
+	DeleteTopics(ctx context.Context, topics []string) error
 }
