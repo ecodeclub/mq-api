@@ -755,7 +755,7 @@ func (b *TestSuite) TestMQConsumer_Consume() {
 	// 关闭消费者
 	err = c.Close()
 	require.NoError(b.T(), err)
-	time.Sleep(5 * time.Second)
+	time.Sleep(20 * time.Second)
 	locker.Lock()
 	val := ans
 	locker.Unlock()
