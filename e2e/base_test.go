@@ -756,7 +756,10 @@ func (b *TestSuite) TestMQConsumer_Consume() {
 	err = c.Close()
 	require.NoError(b.T(), err)
 	time.Sleep(5 * time.Second)
-	assert.ElementsMatch(b.T(), wantVal, genMsg(ans, false))
+	locker.Lock()
+	val := ans
+	locker.Unlock()
+	assert.ElementsMatch(b.T(), wantVal, genMsg(val, false))
 }
 
 func genMsg(msgs []*mq.Message, hasPartitionID bool) []*mq.Message {
