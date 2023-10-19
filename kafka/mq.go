@@ -39,7 +39,6 @@ const defaultPartitionConn = 16
 type MQ struct {
 	// 用于创建topic
 	address           []string
-	conn              *kafka.Conn
 	controllerConn    *kafka.Conn
 	locker            sync.RWMutex
 	closed            bool
@@ -67,7 +66,6 @@ func NewMQ(network string, address []string) (mq.MQ, error) {
 	}
 	return &MQ{
 		address:           address,
-		conn:              conn,
 		controllerConn:    controllerConn,
 		replicationFactor: defaultReplicationFactor,
 	}, nil
@@ -114,6 +112,11 @@ func (m *MQ) Producer(topic string) (mq.Producer, error) {
 	if m.isClosed() {
 		return nil, mqerr.ErrMQIsClosed
 	}
+	m.locker.Lock()
+	defer m.locker.Unlock()
+	if m.closed {
+		return nil, mqerr.ErrMQIsClosed
+	}
 	w := &kafka.Writer{
 		Addr:     kafka.TCP(m.address...),
 		Topic:    topic,
@@ -124,15 +127,17 @@ func (m *MQ) Producer(topic string) (mq.Producer, error) {
 		producer:       w,
 		partitionConns: make(map[int32]*kafka.Conn, defaultPartitionConn),
 	}
-	m.locker.Lock()
 	m.producers = append(m.producers, p)
-	m.locker.Unlock()
 	return p, nil
 }
 
 func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 	if m.isClosed() {
 		return nil, errors.Wrap(mqerr.ErrMQIsClosed, "kafka: ")
+	}
+	m.locker.Lock()
+	if m.closed {
+		return nil, mqerr.ErrMQIsClosed
 	}
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: m.address,
@@ -148,11 +153,9 @@ func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 		msgCh:    msgCh,
 		consumer: r,
 	}
-	m.locker.Lock()
 	m.consumers = append(m.consumers, c)
 	m.locker.Unlock()
 	go c.getMsgFromKafka()
-
 	return c, nil
 }
 

@@ -19,12 +19,11 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"github.com/ecodeclub/mq-api/mqerr"
+	"github.com/pkg/errors"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/ecodeclub/mq-api/mqerr"
-	"github.com/pkg/errors"
 
 	"github.com/ecodeclub/mq-api"
 	"github.com/stretchr/testify/assert"
@@ -61,8 +60,7 @@ func (b *TestSuite) SetupSuite() {
 	if err := b.testMqCreator.Ping(ctx); err != nil {
 		panic(fmt.Sprintf("第三方依赖连接不上 %v", err))
 	}
-	cancel()
-	time.Sleep(10 * time.Second)
+	defer cancel()
 }
 
 // 测试消费组
@@ -73,7 +71,7 @@ func (b *TestSuite) TestMQConsumer_ConsumerGroup() {
 		partitions  int64
 		input       []*mq.Message
 		consumers   func(mqm mq.MQ) []mq.Consumer
-		consumeFunc func(c mq.Consumer) []*mq.Message
+		consumeFunc func(c mq.Consumer, ch chan *mq.Message)
 		wantVal     []*mq.Message
 	}{
 		{
@@ -124,14 +122,12 @@ func (b *TestSuite) TestMQConsumer_ConsumerGroup() {
 					c23,
 				}
 			},
-			consumeFunc: func(c mq.Consumer) []*mq.Message {
+			consumeFunc: func(c mq.Consumer, ch chan *mq.Message) {
 				msgCh, err := c.ConsumeChan(context.Background())
 				require.NoError(b.T(), err)
-				msgs := make([]*mq.Message, 0, 32)
 				for val := range msgCh {
-					msgs = append(msgs, val)
+					ch <- val
 				}
-				return msgs
 			},
 			wantVal: []*mq.Message{
 				{
@@ -234,14 +230,12 @@ func (b *TestSuite) TestMQConsumer_ConsumerGroup() {
 					c16,
 				}
 			},
-			consumeFunc: func(c mq.Consumer) []*mq.Message {
+			consumeFunc: func(c mq.Consumer, ch chan *mq.Message) {
 				msgCh, err := c.ConsumeChan(context.Background())
 				require.NoError(b.T(), err)
-				msgs := make([]*mq.Message, 0, 32)
 				for val := range msgCh {
-					msgs = append(msgs, val)
+					ch <- val
 				}
-				return msgs
 			},
 			wantVal: []*mq.Message{
 				{
@@ -280,28 +274,29 @@ func (b *TestSuite) TestMQConsumer_ConsumerGroup() {
 			p, err := mqm.Producer(tc.topic)
 			require.NoError(t, err)
 			consumers := tc.consumers(mqm)
-			ans := make([]*mq.Message, 0, len(tc.wantVal))
 			var wg sync.WaitGroup
-			locker := sync.RWMutex{}
+			ch := make(chan *mq.Message, 64)
 			for _, c := range consumers {
 				newc := c
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					msgs := tc.consumeFunc(newc)
-					locker.Lock()
-					ans = append(ans, msgs...)
-					locker.Unlock()
+					tc.consumeFunc(newc, ch)
 				}()
 			}
 			for _, msg := range tc.input {
 				_, err := p.Produce(context.Background(), msg)
 				require.NoError(t, err)
 			}
-			time.Sleep(10 * time.Second)
-			err = closeConsumerAndProducer(consumers, []mq.Producer{p})
-			require.NoError(t, err)
+			for {
+				if len(ch) == len(tc.wantVal) {
+					err = closeConsumerAndProducer(consumers, []mq.Producer{p})
+					require.NoError(t, err)
+					break
+				}
+			}
 			wg.Wait()
+			ans := getMsgFromChannel(ch)
 			ansMsg := genMsg(ans, false)
 			assert.ElementsMatch(t, tc.wantVal, ansMsg)
 		})
@@ -316,7 +311,7 @@ func (b *TestSuite) TestMQConsumer_OrderOfMessagesWithinAPartition() {
 		partitions   int64
 		input        []*mq.Message
 		consumers    func(mqm mq.MQ) []mq.Consumer
-		consumerFunc func(c mq.Consumer) []*mq.Message
+		consumerFunc func(c mq.Consumer, ch chan *mq.Message)
 		wantVal      []*mq.Message
 	}{
 		{
@@ -364,14 +359,12 @@ func (b *TestSuite) TestMQConsumer_OrderOfMessagesWithinAPartition() {
 					c11,
 				}
 			},
-			consumerFunc: func(c mq.Consumer) []*mq.Message {
+			consumerFunc: func(c mq.Consumer, ch chan *mq.Message) {
 				msgCh, err := c.ConsumeChan(context.Background())
 				require.NoError(b.T(), err)
-				msgs := make([]*mq.Message, 0, 32)
 				for val := range msgCh {
-					msgs = append(msgs, val)
+					ch <- val
 				}
-				return msgs
 			},
 			wantVal: []*mq.Message{
 				{
@@ -425,31 +418,32 @@ func (b *TestSuite) TestMQConsumer_OrderOfMessagesWithinAPartition() {
 			p, err := mqm.Producer(tc.topic)
 			require.NoError(t, err)
 			consumers := tc.consumers(mqm)
-			ans := make([]*mq.Message, 0, len(tc.wantVal))
 			var wg sync.WaitGroup
-			locker := sync.RWMutex{}
+			ch := make(chan *mq.Message, 64)
 			for _, c := range consumers {
 				newc := c
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					msgs := tc.consumerFunc(newc)
-					locker.Lock()
-					ans = append(ans, msgs...)
-					locker.Unlock()
+					tc.consumerFunc(newc, ch)
 				}()
 			}
 			for _, msg := range tc.input {
-				_, err := p.ProduceWithPartition(context.Background(), msg, 1)
+				_, err := p.ProduceWithPartition(context.Background(), msg, 0)
 				require.NoError(t, err)
 			}
-
-			time.Sleep(10 * time.Second)
-			err = closeConsumerAndProducer(consumers, []mq.Producer{p})
-			require.NoError(t, err)
+			for {
+				if len(ch) == len(tc.wantVal) {
+					err = closeConsumerAndProducer(consumers, []mq.Producer{p})
+					require.NoError(t, err)
+					break
+				}
+			}
 			wg.Wait()
+			ans := getMsgFromChannel(ch)
+			ansMsg := genMsg(ans, false)
 			wantMap := getMsgMap(tc.wantVal)
-			actualMap := getMsgMap(genMsg(ans, false))
+			actualMap := getMsgMap(ansMsg)
 			assert.Equal(t, wantMap, actualMap)
 		})
 	}
@@ -462,7 +456,7 @@ func (b *TestSuite) TestMQProducer_ProduceWithSpecifiedPartitionID() {
 		topic        string
 		partitions   int64
 		input        []ProducerMsg
-		consumerFunc func(c mq.Consumer) []*mq.Message
+		consumerFunc func(c mq.Consumer, ch chan *mq.Message)
 		wantVal      []*mq.Message
 	}{
 		{
@@ -551,14 +545,12 @@ func (b *TestSuite) TestMQProducer_ProduceWithSpecifiedPartitionID() {
 					PartitionID: 2,
 				},
 			},
-			consumerFunc: func(c mq.Consumer) []*mq.Message {
+			consumerFunc: func(c mq.Consumer, ch chan *mq.Message) {
 				msgCh, err := c.ConsumeChan(context.Background())
 				require.NoError(b.T(), err)
-				msgs := make([]*mq.Message, 0, 32)
 				for val := range msgCh {
-					msgs = append(msgs, val)
+					ch <- val
 				}
-				return msgs
 			},
 		},
 	}
@@ -574,28 +566,29 @@ func (b *TestSuite) TestMQProducer_ProduceWithSpecifiedPartitionID() {
 			consumers := []mq.Consumer{
 				c,
 			}
-			ans := make([]*mq.Message, 0, len(tc.wantVal))
 			var wg sync.WaitGroup
-			locker := sync.RWMutex{}
+			ch := make(chan *mq.Message, 64)
 			for _, c := range consumers {
 				newc := c
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					msgs := tc.consumerFunc(newc)
-					locker.Lock()
-					ans = append(ans, msgs...)
-					locker.Unlock()
+					tc.consumerFunc(newc, ch)
 				}()
 			}
 			for _, msg := range tc.input {
 				_, err := p.ProduceWithPartition(context.Background(), msg.msg, msg.partition)
 				require.NoError(t, err)
 			}
-			time.Sleep(10 * time.Second)
-			err = closeConsumerAndProducer([]mq.Consumer{c}, []mq.Producer{p})
-			require.NoError(t, err)
+			for {
+				if len(ch) == len(tc.wantVal) {
+					err = closeConsumerAndProducer(consumers, []mq.Producer{p})
+					require.NoError(t, err)
+					break
+				}
+			}
 			wg.Wait()
+			ans := getMsgFromChannel(ch)
 			assert.ElementsMatch(t, tc.wantVal, genMsg(ans, true))
 		})
 	}
@@ -623,7 +616,16 @@ func (b *TestSuite) TestMQProducer_Close() {
 		}()
 	}
 	// 开启三个goroutine使用 ProducerWithPartition
-	// 0
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := testProducerClose(p)
+			if err != nil {
+				errChan <- err
+			}
+		}()
+	}
 	err = p.Close()
 	require.NoError(t, err)
 	wg.Wait()
@@ -646,7 +648,6 @@ func (b *TestSuite) TestMQAndConsumer_Close() {
 	require.NoError(t, err)
 	c, err := mqm.Consumer(topic, "1")
 	require.NoError(t, err)
-	time.Sleep(3 * time.Second)
 	// 调用close方法
 	err = c.Close()
 	require.NoError(t, err)
@@ -655,7 +656,6 @@ func (b *TestSuite) TestMQAndConsumer_Close() {
 	assert.Equal(t, mqerr.ErrConsumerIsClosed, err)
 	_, err = c.Consume(context.Background())
 	assert.Equal(t, mqerr.ErrConsumerIsClosed, err)
-	time.Sleep(3 * time.Second)
 }
 
 // 测试mq调用close
@@ -723,9 +723,8 @@ func (b *TestSuite) TestMQConsumer_Consume() {
 			}
 		}()
 	}
-	locker := sync.RWMutex{}
 	wantVal := genProduceMsg(3, 6, testTopic)
-	ans := make([]*mq.Message, 0, 32)
+	msgch := make(chan *mq.Message, 64)
 	// 开启3个goroutine消费数据
 	for i := 0; i < 3; i++ {
 		// 测试ConsumeChan
@@ -733,34 +732,28 @@ func (b *TestSuite) TestMQConsumer_Consume() {
 			ch, err := c.ConsumeChan(context.Background())
 			require.NoError(b.T(), err)
 			for val := range ch {
-				locker.Lock()
-				ans = append(ans, val)
-				locker.Unlock()
+				msgch <- val
 			}
 		}()
 		// 测试consumer
 		go func() {
 			msg, err := c.Consume(context.Background())
 			require.NoError(b.T(), err)
-			locker.Lock()
-			ans = append(ans, msg)
-			locker.Unlock()
+			msgch <- msg
 		}()
 	}
 	// 等待数据生产完
 	wg.Wait()
-	// 关闭生产者
-	err = p.Close()
 	// 等待数据处理
-	time.Sleep(5 * time.Second)
-	// 关闭消费者
-	err = c.Close()
-	require.NoError(b.T(), err)
-	time.Sleep(20 * time.Second)
-	locker.Lock()
-	val := ans
-	locker.Unlock()
-	assert.ElementsMatch(b.T(), wantVal, genMsg(val, false))
+	for {
+		if len(msgch) == len(wantVal) {
+			err = closeConsumerAndProducer([]mq.Consumer{c}, []mq.Producer{p})
+			require.NoError(b.T(), err)
+			break
+		}
+	}
+	ans := getMsgFromChannel(msgch)
+	assert.ElementsMatch(b.T(), wantVal, genMsg(ans, false))
 }
 
 func genMsg(msgs []*mq.Message, hasPartitionID bool) []*mq.Message {
@@ -798,6 +791,17 @@ func testProducerClose(p mq.Producer) error {
 	}
 }
 
+func testProduceWithPartitionClose(p mq.Producer) error {
+	for {
+		_, err := p.ProduceWithPartition(context.Background(), &mq.Message{
+			Value: []byte("1"),
+		}, 0)
+		if err != nil {
+			return err
+		}
+	}
+}
+
 func closeConsumerAndProducer(consumers []mq.Consumer, producers []mq.Producer) error {
 	errList := make([]error, 0, len(consumers)+len(producers))
 	for _, c := range consumers {
@@ -828,5 +832,14 @@ func genProduceMsg(number int64, receiver int64, topic string) []*mq.Message {
 		}
 	}
 
+	return list
+}
+
+func getMsgFromChannel(ch chan *mq.Message) []*mq.Message {
+	list := make([]*mq.Message, 0, len(ch))
+	chlen := len(ch)
+	for i := 0; i < chlen; i++ {
+		list = append(list, <-ch)
+	}
 	return list
 }
