@@ -62,6 +62,7 @@ func (b *TestSuite) SetupSuite() {
 		panic(fmt.Sprintf("第三方依赖连接不上 %v", err))
 	}
 	cancel()
+	time.Sleep(10 * time.Second)
 }
 
 // 测试消费组
@@ -297,7 +298,7 @@ func (b *TestSuite) TestMQConsumer_ConsumerGroup() {
 				_, err := p.Produce(context.Background(), msg)
 				require.NoError(t, err)
 			}
-			time.Sleep(5 * time.Second)
+			time.Sleep(10 * time.Second)
 			err = closeConsumerAndProducer(consumers, []mq.Producer{p})
 			require.NoError(t, err)
 			wg.Wait()
@@ -443,7 +444,7 @@ func (b *TestSuite) TestMQConsumer_OrderOfMessagesWithinAPartition() {
 				require.NoError(t, err)
 			}
 
-			time.Sleep(5 * time.Second)
+			time.Sleep(10 * time.Second)
 			err = closeConsumerAndProducer(consumers, []mq.Producer{p})
 			require.NoError(t, err)
 			wg.Wait()
@@ -591,7 +592,7 @@ func (b *TestSuite) TestMQProducer_ProduceWithSpecifiedPartitionID() {
 				_, err := p.ProduceWithPartition(context.Background(), msg.msg, msg.partition)
 				require.NoError(t, err)
 			}
-			time.Sleep(5 * time.Second)
+			time.Sleep(10 * time.Second)
 			err = closeConsumerAndProducer([]mq.Consumer{c}, []mq.Producer{p})
 			require.NoError(t, err)
 			wg.Wait()
