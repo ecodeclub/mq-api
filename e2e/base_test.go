@@ -23,9 +23,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/mqerr"
 	"github.com/pkg/errors"
+
+	"github.com/ecodeclub/mq-api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -58,7 +59,6 @@ func NewBaseSuite(mq MqCreator, testMq mq.MQ) *TestSuite {
 func (b *TestSuite) SetupSuite() {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	if err := b.testMqCreator.Ping(ctx); err != nil {
-
 		panic(fmt.Sprintf("第三方依赖连接不上 %v", err))
 	}
 	cancel()
@@ -595,7 +595,7 @@ func (b *TestSuite) TestMQProducer_ProduceWithSpecifiedPartitionID() {
 			err = closeConsumerAndProducer([]mq.Consumer{c}, []mq.Producer{p})
 			require.NoError(t, err)
 			wg.Wait()
-			assert.ElementsMatch(t, tc.wantVal, genWithPartitionMsg(ans))
+			assert.ElementsMatch(t, tc.wantVal, genMsg(ans, true))
 		})
 	}
 }
@@ -615,7 +615,7 @@ func (b *TestSuite) TestMQProducer_Close() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := testProducer(p)
+			err := testProducerClose(p)
 			if err != nil {
 				errChan <- err
 			}
@@ -692,19 +692,78 @@ func (b *TestSuite) TestMQ_Close() {
 	require.True(t, errors.Is(err, mqerr.ErrConsumerIsClosed))
 }
 
+// 测试producer和consumer的并发
+func (b *TestSuite) TestMQConsumer_Consume() {
+	testmq := b.testMq
+	testTopic := "test_topic7"
+	err := testmq.Topic(context.Background(), testTopic, 1)
+	require.NoError(b.T(), err)
+	p, err := testmq.Producer(testTopic)
+	require.NoError(b.T(), err)
+	c, err := testmq.Consumer(testTopic, "c1")
+	// 开启3个goroutine使用p的Produce，开启3个goroutine使用p的ProduceWithPartition
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			msgs := genProduceMsg(3, 1, testTopic)
+			for _, msg := range msgs {
+				_, err := p.Produce(context.Background(), msg)
+				require.NoError(b.T(), err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			msgs := genProduceMsg(3, 1, testTopic)
+			for _, msg := range msgs {
+				_, err := p.ProduceWithPartition(context.Background(), msg, 0)
+				require.NoError(b.T(), err)
+			}
+		}()
+	}
+	locker := sync.RWMutex{}
+	wantVal := genProduceMsg(3, 6, testTopic)
+	ans := make([]*mq.Message, 0, 32)
+	// 开启3个goroutine消费数据
+	for i := 0; i < 3; i++ {
+		// 测试ConsumeChan
+		go func() {
+			ch, err := c.ConsumeChan(context.Background())
+			require.NoError(b.T(), err)
+			for val := range ch {
+				locker.Lock()
+				ans = append(ans, val)
+				locker.Unlock()
+			}
+		}()
+		// 测试consumer
+		go func() {
+			msg, err := c.Consume(context.Background())
+			require.NoError(b.T(), err)
+			locker.Lock()
+			ans = append(ans, msg)
+			locker.Unlock()
+		}()
+	}
+	// 等待数据生产完
+	wg.Wait()
+	// 关闭生产者
+	err = p.Close()
+	// 等待数据处理
+	time.Sleep(5 * time.Second)
+	// 关闭消费者
+	err = c.Close()
+	require.NoError(b.T(), err)
+	time.Sleep(5 * time.Second)
+	assert.ElementsMatch(b.T(), wantVal, genMsg(ans, false))
+}
+
 func genMsg(msgs []*mq.Message, hasPartitionID bool) []*mq.Message {
 	for index := range msgs {
 		if !hasPartitionID {
 			msgs[index].PartitionID = 0
 		}
-		msgs[index].Offset = 0
-		msgs[index].Header = nil
-	}
-	return msgs
-}
-
-func genWithPartitionMsg(msgs []*mq.Message) []*mq.Message {
-	for index := range msgs {
 		msgs[index].Offset = 0
 		msgs[index].Header = nil
 	}
@@ -724,7 +783,7 @@ func getMsgMap(msgs []*mq.Message) map[string][]*mq.Message {
 	return wantMap
 }
 
-func testProducer(p mq.Producer) error {
+func testProducerClose(p mq.Producer) error {
 	for {
 		_, err := p.Produce(context.Background(), &mq.Message{
 			Value: []byte("1"),
@@ -750,4 +809,20 @@ func closeConsumerAndProducer(consumers []mq.Consumer, producers []mq.Producer) 
 		}
 	}
 	return multierr.Combine(errList...)
+}
+
+// 生成消息
+func genProduceMsg(number int64, receiver int64, topic string) []*mq.Message {
+	list := make([]*mq.Message, 0, number)
+	for j := 0; j < int(receiver); j++ {
+		for i := 0; i < int(number); i++ {
+			list = append(list, &mq.Message{
+				Value: []byte(fmt.Sprintf("%d", i)),
+				Key:   []byte(fmt.Sprintf("%d", i)),
+				Topic: topic,
+			})
+		}
+	}
+
+	return list
 }

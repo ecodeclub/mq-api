@@ -18,11 +18,12 @@ package e2e
 
 import (
 	"context"
+	"testing"
+
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/kafka"
 	kafkago "github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/suite"
-	"testing"
 )
 
 func TestKafka(t *testing.T) {
@@ -50,7 +51,6 @@ func (k KafkaTestSuite) Init() mq.MQ {
 }
 
 func (k KafkaTestSuite) Ping(ctx context.Context) error {
-
 	topic := "my-topic"
 	partition := 0
 	conn, err := kafkago.DialLeader(ctx, "tcp", k.address[0], topic, partition)
