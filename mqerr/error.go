@@ -1,5 +1,3 @@
-//go:build e2e
-
 // Copyright 2021 ecodeclub
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,14 +11,13 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package e2e
 
-import (
-	"testing"
+package mqerr
 
-	"github.com/stretchr/testify/assert"
+import "errors"
+
+var (
+	ErrConsumerIsClosed = errors.New("消费者已经关闭")
+	ErrProducerIsClosed = errors.New("生产者已经关闭")
+	ErrMQIsClosed       = errors.New("mq已经关闭")
 )
-
-func TestE2E(t *testing.T) {
-	assert.True(t, true)
-}
