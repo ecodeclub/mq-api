@@ -19,11 +19,12 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"github.com/ecodeclub/mq-api/mqerr"
-	"github.com/pkg/errors"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ecodeclub/mq-api/mqerr"
+	"github.com/pkg/errors"
 
 	"github.com/ecodeclub/mq-api"
 	"github.com/stretchr/testify/assert"
