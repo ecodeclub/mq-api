@@ -16,93 +16,104 @@ package kafka
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
+	"time"
 
-	"github.com/pkg/errors"
-	"go.uber.org/multierr"
-
+	"github.com/ecodeclub/ekit/retry"
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/kafka/common"
 	"github.com/ecodeclub/mq-api/mqerr"
-	"github.com/segmentio/kafka-go"
+	"github.com/pkg/errors"
+	kafkago "github.com/segmentio/kafka-go"
 )
 
 type Producer struct {
-	topic          string
-	producer       *kafka.Writer
-	closed         bool
-	address        string
-	partitionConns map[int32]*kafka.Conn
-	locker         sync.RWMutex
+	topic      string
+	partitions int
+
+	writer *kafkago.Writer
+	locker *sync.RWMutex
+
+	closeOnce *sync.Once
+	closed    bool
+	closeErr  error
+}
+
+func NewProducer(address []string, topic string, partitions int, balancer kafkago.Balancer) *Producer {
+	return &Producer{
+		topic:      topic,
+		partitions: partitions,
+		locker:     &sync.RWMutex{},
+		writer: &kafkago.Writer{
+			Addr:     kafkago.TCP(address...),
+			Topic:    topic,
+			Balancer: balancer,
+		},
+		closed:    false,
+		closeOnce: &sync.Once{},
+	}
 }
 
 func (p *Producer) Produce(ctx context.Context, m *mq.Message) (*mq.ProducerResult, error) {
-	p.locker.Lock()
-	defer p.locker.Unlock()
-	if p.closed {
-		return nil, errors.Wrap(mqerr.ErrProducerIsClosed, "kafka: ")
-	}
-	kafkaMsg := kafka.Message{
-		Value:   m.Value,
-		Key:     m.Key,
-		Headers: common.ConvertToKafkaHeader(m.Header),
-	}
-	return &mq.ProducerResult{}, p.producer.WriteMessages(ctx, kafkaMsg)
+	return p.produce(ctx, m, nil)
 }
 
-func (p *Producer) ProduceWithPartition(ctx context.Context, m *mq.Message, partitionID int32) (*mq.ProducerResult, error) {
-	p.locker.Lock()
-	defer p.locker.Unlock()
-	if p.closed {
-		return nil, errors.Wrap(mqerr.ErrProducerIsClosed, "kafka: ")
+func (p *Producer) ProduceWithPartition(ctx context.Context, m *mq.Message, partition int) (*mq.ProducerResult, error) {
+	if partition < 0 || partition >= p.partitions {
+		return nil, fmt.Errorf("kafka: %w", mqerr.ErrInvalidPartition)
 	}
-	conn, err := p.getPartitionConn(ctx, partitionID)
-	if err != nil {
-		return nil, err
+	return p.produce(ctx, m, metaMessage{SpecifiedPartitionKey: partition})
+}
+
+func (p *Producer) produce(ctx context.Context, m *mq.Message, meta metaMessage) (*mq.ProducerResult, error) {
+	message := p.newKafkaMessage(m, meta)
+
+	const (
+		initialInterval = 100 * time.Millisecond
+		maxInterval     = 10 * time.Second
+		maxRetries      = 50
+	)
+
+	strategy, _ := retry.NewExponentialBackoffRetryStrategy(initialInterval, maxInterval, maxRetries)
+
+	for {
+		err := p.writer.WriteMessages(ctx, message)
+		if err == nil {
+			return &mq.ProducerResult{}, nil
+		}
+		if errors.Is(err, io.ErrClosedPipe) {
+			return &mq.ProducerResult{}, fmt.Errorf("kafka: %w", mqerr.ErrProducerIsClosed)
+		}
+		// 控制流走到这Topic和Partition已经验证合法
+		// 要么选主阶段、要么分区在broker间移动,因此这两种情况需要重试
+		if errors.Is(err, kafkago.LeaderNotAvailable) || errors.Is(err, kafkago.UnknownTopicOrPartition) {
+			duration, ok := strategy.Next()
+			if ok {
+				time.Sleep(duration)
+				continue
+			}
+		}
+		return &mq.ProducerResult{}, err
 	}
-	_, err = conn.WriteMessages(kafka.Message{
+}
+
+func (p *Producer) newKafkaMessage(m *mq.Message, meta metaMessage) kafkago.Message {
+	message := kafkago.Message{
 		Value:   m.Value,
 		Key:     m.Key,
 		Headers: common.ConvertToKafkaHeader(m.Header),
-	})
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, errors.Wrap(mqerr.ErrProducerIsClosed, "kafka: ")
-		}
-		return nil, err
 	}
-	return &mq.ProducerResult{}, err
+	if meta != nil {
+		message.WriterData = meta
+	}
+	return message
 }
 
 func (p *Producer) Close() error {
-	p.locker.Lock()
-	defer p.locker.Unlock()
-	p.closed = true
-	errList := make([]error, 0, len(p.partitionConns)+1)
-	for _, conn := range p.partitionConns {
-		err := conn.Close()
-		if err != nil {
-			errList = append(errList, err)
-		}
-	}
-	err := p.producer.Close()
-	if err != nil {
-		errList = append(errList, err)
-	}
-
-	return multierr.Combine(errList...)
-}
-
-func (p *Producer) getPartitionConn(ctx context.Context, partitionID int32) (*kafka.Conn, error) {
-	conn, ok := p.partitionConns[partitionID]
-	if ok {
-		return conn, nil
-	}
-	conn, err := kafka.DialLeader(ctx, "tcp", p.address, p.topic, int(partitionID))
-	if err != nil {
-		return nil, err
-	}
-	p.partitionConns[partitionID] = conn
-	return conn, nil
+	p.closeOnce.Do(func() {
+		p.closeErr = p.writer.Close()
+	})
+	return p.closeErr
 }
