@@ -28,21 +28,14 @@ import (
 
 func TestKafka(t *testing.T) {
 	address := []string{"127.0.0.1:9092"}
-	testMq, err := kafka.NewMQ("tcp", address)
-	if err != nil {
-		panic(err)
-	}
-	suite.Run(t, NewBaseSuite(
-		KafkaTestSuite{address: address},
-		testMq,
-	))
+	suite.Run(t, NewTestSuite(KafkaCreator{address: address}))
 }
 
-type KafkaTestSuite struct {
+type KafkaCreator struct {
 	address []string
 }
 
-func (k KafkaTestSuite) Init() mq.MQ {
+func (k KafkaCreator) Create() mq.MQ {
 	kafkaMq, err := kafka.NewMQ("tcp", k.address)
 	if err != nil {
 		panic(err)
@@ -50,15 +43,14 @@ func (k KafkaTestSuite) Init() mq.MQ {
 	return kafkaMq
 }
 
-func (k KafkaTestSuite) Ping(ctx context.Context) error {
-	topic := "my-topic"
-	partition := 0
-	conn, err := kafkago.DialLeader(ctx, "tcp", k.address[0], topic, partition)
+func (k KafkaCreator) Ping(ctx context.Context) error {
+	conn, err := kafkago.DialContext(ctx, "tcp", k.address[0])
 	if err != nil {
-		return err
+		panic(err.Error())
 	}
-	_, err = conn.WriteMessages(
-		kafkago.Message{Value: []byte("one!")},
-	)
+	defer func() {
+		_ = conn.Close()
+	}()
+	_, err = conn.ReadPartitions()
 	return err
 }

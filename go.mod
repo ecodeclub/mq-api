@@ -3,10 +3,12 @@ module github.com/ecodeclub/mq-api
 go 1.21.0
 
 require (
+	github.com/ecodeclub/ekit v0.0.8
 	github.com/pkg/errors v0.9.1
 	github.com/segmentio/kafka-go v0.4.44
 	github.com/stretchr/testify v1.8.4
 	go.uber.org/multierr v1.11.0
+	golang.org/x/sync v0.4.0
 )
 
 require (

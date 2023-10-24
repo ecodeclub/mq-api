@@ -12,14 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mqerr
+package validator
 
-import "errors"
-
-var (
-	ErrConsumerIsClosed = errors.New("消费者已经关闭")
-	ErrProducerIsClosed = errors.New("生产者已经关闭")
-	ErrMQIsClosed       = errors.New("mq已经关闭")
-	ErrInvalidTopic     = errors.New("topic非法")
-	ErrInvalidPartition = errors.New("partition非法")
+import (
+	"regexp"
+	"strings"
 )
+
+const (
+	maxTopicNameLength = 50
+)
+
+func IsValidTopic(name string) bool {
+	// 检查名称长度
+	if !(0 < len(name) && len(name) <= maxTopicNameLength) {
+		return false
+	}
+
+	// 检查特殊字符是否作为开头
+	if strings.HasPrefix(name, "_") || strings.HasPrefix(name, "-") || strings.HasPrefix(name, ".") {
+		return false
+	}
+
+	// 使用正则表达式检查名称格式
+	regex := regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_\-.]*[a-zA-Z0-9]$`)
+	return regex.MatchString(name)
+}

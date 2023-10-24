@@ -17,50 +17,67 @@ package kafka
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"sync"
-	"time"
 
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/kafka/common"
 	"github.com/ecodeclub/mq-api/mqerr"
-	"github.com/segmentio/kafka-go"
+	kafkago "github.com/segmentio/kafka-go"
 )
 
-const (
-	ReadTimeout = 100 * time.Millisecond
-)
+// consumerChannel先默认1000
+const msgChannelSize = 1000
 
 type Consumer struct {
-	topic string
-	id    string
-	// 负责关闭开启的goroutine
-	closeCh  chan struct{}
-	closed   bool
-	consumer *kafka.Reader
-	once     sync.Once
-	locker   sync.RWMutex
-	msgCh    chan *mq.Message
+	topic   string
+	groupID string
+
+	reader *kafkago.Reader
+	msgCh  chan *mq.Message
+
+	closeCtx           context.Context
+	closeCtxCancelFunc context.CancelFunc
+	closeErr           error
+	closeOnce          *sync.Once
+}
+
+func NewConsumer(address []string, topic, groupID string) *Consumer {
+	ctx, cancelFunc := context.WithCancel(context.Background())
+	log.Printf("create consumer: topc = %s, groupID = %s\n\n", topic, groupID)
+	return &Consumer{
+		topic:   topic,
+		groupID: groupID,
+		reader: kafkago.NewReader(kafkago.ReaderConfig{
+			Brokers: address,
+			Topic:   topic,
+			GroupID: groupID,
+		}),
+		msgCh:              make(chan *mq.Message, msgChannelSize),
+		closeCtx:           ctx,
+		closeCtxCancelFunc: cancelFunc,
+		closeErr:           nil,
+		closeOnce:          &sync.Once{},
+	}
 }
 
 func (c *Consumer) Consume(ctx context.Context) (*mq.Message, error) {
-	if c.isClosed() {
-		return nil, mqerr.ErrConsumerIsClosed
-	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case m := <-c.msgCh:
+	case m, ok := <-c.msgCh:
+		if !ok {
+			return nil, fmt.Errorf("kafka: %w", mqerr.ErrConsumerIsClosed)
+		}
 		return m, nil
-	case <-c.closeCh:
-		return nil, mqerr.ErrConsumerIsClosed
 	}
 }
 
 func (c *Consumer) ConsumeChan(ctx context.Context) (<-chan *mq.Message, error) {
-	if c.isClosed() {
-		return nil, mqerr.ErrConsumerIsClosed
+	if c.closeCtx.Err() != nil {
+		return nil, fmt.Errorf("kafka: %w", mqerr.ErrConsumerIsClosed)
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -69,15 +86,11 @@ func (c *Consumer) ConsumeChan(ctx context.Context) (<-chan *mq.Message, error) 
 }
 
 func (c *Consumer) Close() error {
-	var err error
-	c.once.Do(func() {
-		err = c.consumer.Close()
-		close(c.closeCh)
+	c.closeOnce.Do(func() {
+		c.closeCtxCancelFunc()
+		c.closeErr = c.reader.Close()
 	})
-	c.locker.Lock()
-	c.closed = true
-	c.locker.Unlock()
-	return err
+	return c.closeErr
 }
 
 // getMsgFromKafka 完成持续从kafka内获取数据
@@ -85,32 +98,21 @@ func (c *Consumer) getMsgFromKafka() {
 	defer func() {
 		close(c.msgCh)
 	}()
+
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), ReadTimeout)
-		m, err := c.consumer.ReadMessage(ctx)
-		cancel()
+		m, err := c.reader.ReadMessage(c.closeCtx)
 		if err != nil {
-			switch {
-			case errors.Is(err, context.DeadlineExceeded):
-				continue
-			case errors.Is(err, io.EOF):
+			if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
 				return
-			default:
-				log.Printf("读取消息失败: %s", err.Error())
-				continue
 			}
+			log.Printf("读取消息失败: %s", err.Error())
+			continue
 		}
-		msg := common.ConvertToMqMsg(m)
+		msg := common.ConvertToMQMessage(m)
 		select {
 		case c.msgCh <- msg:
-		case <-c.closeCh:
+		case <-c.closeCtx.Done():
 			return
 		}
 	}
-}
-
-func (c *Consumer) isClosed() bool {
-	c.locker.RLock()
-	defer c.locker.RUnlock()
-	return c.closed
 }

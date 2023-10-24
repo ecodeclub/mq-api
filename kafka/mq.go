@@ -16,40 +16,39 @@ package kafka
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"sync"
 
 	"github.com/ecodeclub/mq-api"
+	"github.com/ecodeclub/mq-api/internal/pkg/validator"
 	"github.com/ecodeclub/mq-api/mqerr"
 	"github.com/pkg/errors"
-	"github.com/segmentio/kafka-go"
+	kafkago "github.com/segmentio/kafka-go"
 	"go.uber.org/multierr"
 )
-
-// consumerChannel先默认1000
-const msgChannelSize = 1000
 
 // 默认分区副本数
 const defaultReplicationFactor = 1
 
-// 默认分区连接数
-const defaultPartitionConn = 16
-
 type MQ struct {
-	// 用于创建topic
 	address           []string
-	controllerConn    *kafka.Conn
-	locker            sync.RWMutex
-	closed            bool
+	controllerConn    *kafkago.Conn
 	replicationFactor int
+
+	locker   sync.RWMutex
+	closed   bool
+	closeErr error
+
 	// 方便释放资源
-	producers []mq.Producer
-	consumers []mq.Consumer
+	topicConfigMapping map[string]kafkago.TopicConfig
+	producers          []mq.Producer
+	consumers          []mq.Consumer
 }
 
 func NewMQ(network string, address []string) (mq.MQ, error) {
-	conn, err := kafka.Dial(network, address[0])
+	conn, err := kafkago.Dial(network, address[0])
 	if err != nil {
 		return nil, err
 	}
@@ -59,102 +58,89 @@ func NewMQ(network string, address []string) (mq.MQ, error) {
 		return nil, err
 	}
 	// 与控制器建立连接
-	var controllerConn *kafka.Conn
-	controllerConn, err = kafka.Dial("tcp", net.JoinHostPort(controller.Host, strconv.Itoa(controller.Port)))
+	var controllerConn *kafkago.Conn
+	controllerConn, err = kafkago.Dial("tcp", net.JoinHostPort(controller.Host, strconv.Itoa(controller.Port)))
 	if err != nil {
 		return nil, err
 	}
 	return &MQ{
-		address:           address,
-		controllerConn:    controllerConn,
-		replicationFactor: defaultReplicationFactor,
+		address:            address,
+		controllerConn:     controllerConn,
+		replicationFactor:  defaultReplicationFactor,
+		topicConfigMapping: make(map[string]kafkago.TopicConfig),
 	}, nil
 }
 
-// DeleteTopics 删除topic
-func (m *MQ) DeleteTopics(ctx context.Context, topics []string) error {
+func (m *MQ) CreateTopic(ctx context.Context, name string, partitions int) error {
+	if !validator.IsValidTopic(name) {
+		return fmt.Errorf("%w: %s", mqerr.ErrInvalidTopic, name)
+	}
+
+	if partitions <= 0 {
+		return fmt.Errorf("%w: %d", mqerr.ErrInvalidPartition, partitions)
+	}
+
 	m.locker.Lock()
 	defer m.locker.Unlock()
+
 	if m.closed {
-		return errors.Wrap(mqerr.ErrMQIsClosed, "kafka: ")
+		return fmt.Errorf("kafka: %w", mqerr.ErrMQIsClosed)
 	}
+
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+
+	m.topicConfigMapping[name] = kafkago.TopicConfig{Topic: name, NumPartitions: partitions, ReplicationFactor: m.replicationFactor}
+	return m.controllerConn.CreateTopics(m.topicConfigMapping[name])
+}
+
+// DeleteTopics 删除topic
+func (m *MQ) DeleteTopics(ctx context.Context, topics ...string) error {
+	m.locker.Lock()
+	defer m.locker.Unlock()
+
+	if m.closed {
+		return fmt.Errorf("kafka: %w", mqerr.ErrMQIsClosed)
+	}
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	err := m.controllerConn.DeleteTopics(topics...)
-	var val kafka.Error
-	if errors.As(err, &val) && val == kafka.UnknownTopicOrPartition {
+	var val kafkago.Error
+	if errors.As(err, &val) && val == kafkago.UnknownTopicOrPartition {
 		return nil
 	}
 	return err
 }
 
-func (m *MQ) Topic(ctx context.Context, name string, partitions int) error {
-	m.locker.Lock()
-	defer m.locker.Unlock()
-	if m.closed {
-		return errors.Wrap(mqerr.ErrMQIsClosed, "kafka: ")
-	}
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	topicConfigs := []kafka.TopicConfig{
-		{
-			Topic:             name,
-			NumPartitions:     partitions,
-			ReplicationFactor: m.replicationFactor,
-		},
-	}
-	return m.controllerConn.CreateTopics(topicConfigs...)
-}
-
 func (m *MQ) Producer(topic string) (mq.Producer, error) {
-	if m.isClosed() {
-		return nil, mqerr.ErrMQIsClosed
-	}
 	m.locker.Lock()
 	defer m.locker.Unlock()
+
 	if m.closed {
-		return nil, mqerr.ErrMQIsClosed
+		return nil, fmt.Errorf("kafka: %w", mqerr.ErrMQIsClosed)
 	}
-	w := &kafka.Writer{
-		Addr:     kafka.TCP(m.address...),
-		Topic:    topic,
-		Balancer: &kafka.Hash{},
-	}
-	p := &Producer{
-		topic:          topic,
-		producer:       w,
-		partitionConns: make(map[int32]*kafka.Conn, defaultPartitionConn),
-	}
+
+	balancer, _ := NewSpecifiedPartitionBalancer(&kafkago.Hash{})
+	p := NewProducer(m.address, topic, m.topicConfigMapping[topic].NumPartitions, balancer)
 	m.producers = append(m.producers, p)
 	return p, nil
 }
 
 func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
-	if m.isClosed() {
-		return nil, errors.Wrap(mqerr.ErrMQIsClosed, "kafka: ")
-	}
 	m.locker.Lock()
+	defer m.locker.Unlock()
+
 	if m.closed {
-		return nil, mqerr.ErrMQIsClosed
+		return nil, fmt.Errorf("kafka: %w", mqerr.ErrMQIsClosed)
 	}
-	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers: m.address,
-		Topic:   topic,
-		GroupID: groupID,
-	})
-	closeCh := make(chan struct{})
-	msgCh := make(chan *mq.Message, msgChannelSize)
-	c := &Consumer{
-		topic:    topic,
-		id:       groupID,
-		closeCh:  closeCh,
-		msgCh:    msgCh,
-		consumer: r,
-	}
+
+	c := NewConsumer(m.address, topic, groupID)
 	m.consumers = append(m.consumers, c)
-	m.locker.Unlock()
+
 	go c.getMsgFromKafka()
 	return c, nil
 }
@@ -162,26 +148,19 @@ func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 func (m *MQ) Close() error {
 	m.locker.Lock()
 	defer m.locker.Unlock()
-	errorList := make([]error, 0, len(m.consumers))
-	for _, p := range m.producers {
-		err := p.Close()
-		if err != nil {
-			errorList = append(errorList, err)
-		}
-	}
-	for _, c := range m.consumers {
-		err := c.Close()
-		if err != nil {
-			errorList = append(errorList, err)
-		}
-	}
-	m.closed = true
 
-	return multierr.Combine(errorList...)
-}
+	if !m.closed {
+		errorList := make([]error, 0, len(m.producers)+len(m.consumers))
+		for _, p := range m.producers {
+			errorList = append(errorList, p.Close())
+		}
+		for _, c := range m.consumers {
+			errorList = append(errorList, c.Close())
+		}
+		m.closeErr = multierr.Combine(errorList...)
 
-func (m *MQ) isClosed() bool {
-	m.locker.RLock()
-	defer m.locker.RUnlock()
-	return m.closed
+		m.closed = true
+	}
+
+	return m.closeErr
 }
