@@ -130,34 +130,6 @@ func (m *MQ) Producer(topic string) (mq.Producer, error) {
 	return p, nil
 }
 
-/*
-func (m *MQ) getPartitions(topic string) (int, error) {
-	strategy, err := retry.NewExponentialBackoffRetryStrategy(100*time.Millisecond, 10*time.Second, 50)
-	if err != nil {
-		return 0, err
-	}
-	for {
-		partitions, err := m.controllerConn.ReadPartitions(topic)
-		if err != nil {
-			if errors.Is(err, kafkago.InvalidTopic) {
-				return 0, mqerr.ErrInvalidTopic
-			}
-			if errors.Is(err, kafkago.LeaderNotAvailable) {
-				next, ok := strategy.Next()
-				if !ok {
-					return 0, err
-				}
-				time.Sleep(next)
-				continue
-			}
-			return 0, err
-		}
-		log.Printf("topic = %s, partitions = %#v\n", topic, partitions)
-		return len(partitions), nil
-	}
-}
-*/
-
 func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 	m.locker.Lock()
 	defer m.locker.Unlock()

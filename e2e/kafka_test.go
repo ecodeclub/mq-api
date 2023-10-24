@@ -28,7 +28,7 @@ import (
 
 func TestKafka(t *testing.T) {
 	address := []string{"127.0.0.1:9092"}
-	suite.Run(t, NewTestSuite("segmentio-kafka-go", KafkaCreator{address: address}))
+	suite.Run(t, NewTestSuite(KafkaCreator{address: address}))
 }
 
 type KafkaCreator struct {

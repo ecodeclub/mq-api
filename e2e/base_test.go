@@ -18,7 +18,6 @@ package e2e
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"sync"
 	"testing"
@@ -29,7 +28,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"go.uber.org/multierr"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -54,9 +52,8 @@ type consumerInfo struct {
 	GroupID string
 }
 
-func NewTestSuite(name string, creator MQCreator) *TestSuite {
+func NewTestSuite(creator MQCreator) *TestSuite {
 	return &TestSuite{
-		name:      name,
 		mqCreator: creator,
 	}
 }
@@ -257,7 +254,7 @@ func (b *TestSuite) TestMQ_Close() {
 	p, err := messageQueue.Producer(topic11)
 	require.NoError(t, err)
 
-	consumerGroupID := "1"
+	consumerGroupID := "c1"
 	c, err := messageQueue.Consumer(topic11, consumerGroupID)
 	require.NoError(t, err)
 
@@ -415,7 +412,7 @@ func (b *TestSuite) TestProducer_ProduceWithPartition() {
 func (b *TestSuite) testProduceMessageConcurrently(t *testing.T, producerNum int, produceFunc func(p mq.Producer, m mq.Message, partition int) error, topic string, partitions int, groupID string, withSpecifiedPartition bool) {
 	producers, consumers := b.newProducersAndConsumers(t, topic, partitions, producerInfo{Num: producerNum}, consumerInfo{Num: partitions, GroupID: groupID})
 
-	sendMessages := newExpectedMessages([][]string{{"kafka", "nsq", "rocket"}, {"go", "rust", "python"}}, withSpecifiedPartition)
+	sendMessages := newExpectedMessages("kafka", "nsq", "rocket", "go", "rust", "python")
 
 	var eg errgroup.Group
 
@@ -476,7 +473,7 @@ func (b *TestSuite) TestProducer_Close() {
 	t.Parallel()
 
 	topic15, partitions := "topic15", 1
-	producers, consumers := b.newProducersAndConsumers(t, topic15, partitions, producerInfo{Num: 1}, consumerInfo{Num: 1})
+	producers, consumers := b.newProducersAndConsumers(t, topic15, partitions, producerInfo{Num: 1}, consumerInfo{Num: 1, GroupID: "c1"})
 
 	p, c := producers[0], consumers[0]
 
@@ -524,7 +521,7 @@ func (b *TestSuite) TestConsumer_Close() {
 
 	topic5, partitions := "topic5", 1
 
-	_, consumers := b.newProducersAndConsumers(t, topic5, partitions, producerInfo{}, consumerInfo{Num: 1})
+	_, consumers := b.newProducersAndConsumers(t, topic5, partitions, producerInfo{}, consumerInfo{Num: 1, GroupID: "c1"})
 
 	c := consumers[0]
 
@@ -564,10 +561,6 @@ func (b *TestSuite) TestConsumer_Close() {
 }
 
 func (b *TestSuite) TestConsumer_ConsumeChan() {
-	// 同一Topic:
-	// Close()前, 1) 并发获取Chan, 获取到消息的内容与produce的一样
-	//            2) 单个Consumer, 超时返回错误
-	// Close()后, 并发调用ConsumeChan, 返回关闭的Chan + 返回mqerr.ErrConsumerIsClosed, 详见TestConsumer_Close()
 	t := b.T()
 	t.Parallel()
 
@@ -588,123 +581,138 @@ func (b *TestSuite) TestConsumer_ConsumeChan() {
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
-	t.Run("同一Topic_单个分区", func(t *testing.T) {
+	t.Run("相通消费者组", func(t *testing.T) {
 		t.Parallel()
 
-		t.Run("单个消费者组", func(t *testing.T) {
+		t.Run("单分区_分区内顺序消费", func(t *testing.T) {
 			t.Parallel()
 
-			t.Run("组内单个消费者顺序消费", func(t *testing.T) {
-				t.Skip()
-				t.Parallel()
-
-				topic7, partitions := "topic7", 1
-				groupID := "c1"
-
-				producers, consumers := b.newProducersAndConsumers(t, topic7, partitions, producerInfo{Num: 1}, consumerInfo{Num: 1, GroupID: groupID})
-
-				p, c := producers[0], consumers[0]
-
-				expectedMessages := []*mq.Message{
-					{Header: make(mq.Header), Value: []byte("hello"), Partition: 0, Offset: 0},
-					{Header: make(mq.Header), Value: []byte("world"), Partition: 0, Offset: 1},
+			topic7, partitions := "topic7", 1
+			groupID := "c1"
+			consumeFunc := func(c mq.Consumer) (mq.Message, error) {
+				ch, err := c.ConsumeChan(context.Background())
+				if err != nil {
+					return mq.Message{}, err
 				}
-
-				// 并发发送多个信息,
-				var eg errgroup.Group
-				for _, message := range expectedMessages {
-					message := message
-					eg.Go(func() error {
-						_, err := p.Produce(context.Background(), message)
-						return err
-					})
-				}
-				require.NoError(t, eg.Wait())
-
-				messageChan, err := c.ConsumeChan(context.Background())
-				require.NoError(t, err)
-
-				// 验证收到的消息 —— 各个字段都要验证
-				for _, expectedMessage := range expectedMessages {
-					actualMessage := <-messageChan
-					actualMessage.Topic = ""
-					assert.Equal(t, expectedMessage, actualMessage)
-				}
-			})
-
-			t.Run("组内多个消费者竞争消费", func(t *testing.T) {
-				t.Parallel()
-
-				topic8, partitions := "topic8", 3
-				groupID := "c1"
-
-				producers, consumers := b.newProducersAndConsumers(t, topic8, partitions, producerInfo{Num: 1}, consumerInfo{Num: 3, GroupID: groupID})
-
-				p, c1, c2, c3 := producers[0], consumers[0], consumers[1], consumers[2]
-
-				expectedValues := [][]string{{"go", "python", "rust"}, {"kafka", "rabbitmq", "rocketmq"}, {"redis", "mysql", "mongodb"}}
-				var eg errgroup.Group
-				mp := &sync.Map{}
-				for i, values := range expectedValues {
-					mp.Store(int64(i), make([]string, 0, len(values)))
-
-					for _, value := range values {
-						value := value
-						partition := i
-						eg.Go(func() error {
-							_, err := p.ProduceWithPartition(context.Background(), &mq.Message{Value: []byte(value)}, partition)
-							require.NoError(t, err, partition)
-							return err
-						})
-					}
-				}
-
-				for _, c := range []mq.Consumer{c1, c2, c3} {
-					c := c
-					eg.Go(func() error {
-						messageChan, err := c.ConsumeChan(context.Background())
-						require.NoError(t, err)
-						for {
-							message := <-messageChan
-							v, ok := mp.Load(message.Partition)
-							require.True(t, ok)
-
-							values, ok := v.([]string)
-							require.True(t, ok)
-
-							values = append(values, string(message.Value))
-							mp.Store(message.Partition, values)
-
-							if len(values) == cap(values) {
-								return nil
-							}
-						}
-					})
-				}
-
-				require.NoError(t, eg.Wait())
-
-				for partition, expectedValue := range expectedValues {
-					v, ok := mp.Load(int64(partition))
-					require.True(t, ok)
-					actualValue, ok := v.([]string)
-					require.True(t, ok)
-					require.ElementsMatch(t, actualValue, expectedValue)
-				}
-			})
+				message := <-ch
+				return *message, err
+			}
+			b.testConsumeSequentially(t, consumeFunc, topic7, partitions, groupID)
 		})
 
-		t.Run("多个消费者组", func(t *testing.T) {
-			t.Skip()
+		t.Run("多分区_分区内顺序消费_分区间无序_消费者个数必须与分区数相等", func(t *testing.T) {
 			t.Parallel()
 
-			t.Run("组内单个消费者顺序消费_组间互不干扰可重复消费", func(t *testing.T) {
-			})
-
-			t.Run("组内多个消费者竞争消费_组间互不干扰可重复消费", func(t *testing.T) {
-			})
+			topic19, partitions := "topic19", 3
+			groupID := "c1"
+			consumeFunc := func(c mq.Consumer) (mq.Message, error) {
+				ch, err := c.ConsumeChan(context.Background())
+				if err != nil {
+					return mq.Message{}, err
+				}
+				message := <-ch
+				return *message, err
+			}
+			b.testConsumeSequentially(t, consumeFunc, topic19, partitions, groupID)
 		})
 	})
+
+	t.Run("不同消费者组", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("单分区_分区内顺序消费_消费组间互不影响", func(t *testing.T) {
+			t.Parallel()
+
+			topic20, partitions := "topic20", 1
+			groupIDs := []string{"c1", "c2"}
+			consumeFunc := func(c mq.Consumer) (mq.Message, error) {
+				ch, err := c.ConsumeChan(context.Background())
+				if err != nil {
+					return mq.Message{}, err
+				}
+				message := <-ch
+				return *message, err
+			}
+			b.testConsumeSequentially(t, consumeFunc, topic20, partitions, groupIDs...)
+		})
+
+		t.Run("多分区_分区内顺序消费_分区间无序_消费组间互不影响_消费者个数必须与分区数相等", func(t *testing.T) {
+			t.Parallel()
+
+			topic21, partitions := "topic21", 3
+			groupIDs := []string{"c1", "c2", "c3"}
+			consumeFunc := func(c mq.Consumer) (mq.Message, error) {
+				ch, err := c.ConsumeChan(context.Background())
+				if err != nil {
+					return mq.Message{}, err
+				}
+				message := <-ch
+				return *message, err
+			}
+			b.testConsumeSequentially(t, consumeFunc, topic21, partitions, groupIDs...)
+		})
+	})
+}
+
+func (b *TestSuite) testConsumeSequentially(t *testing.T, consumeFunc func(c mq.Consumer) (mq.Message, error), topic string, partitions int, groupIDs ...string) {
+	producers, _ := b.newProducersAndConsumers(t, topic, partitions, producerInfo{Num: 1}, consumerInfo{})
+	p := producers[0]
+	sendMessage := newExpectedMessages("0", "1", "2", "3", "4", "5")
+	expectedMessageMap := make(map[int64][]mq.Message)
+
+	// 并发发送多个信息,
+	var eg errgroup.Group
+	for i, message := range sendMessage {
+		partition := i % partitions
+		msg := message
+		eg.Go(func() error {
+			_, err := p.ProduceWithPartition(context.Background(), &msg, partition)
+			return err
+		})
+		message.Partition = int64(partition)
+		expectedMessageMap[message.Partition] = append(expectedMessageMap[message.Partition], message)
+	}
+
+	require.NoError(t, eg.Wait())
+
+	for _, groupID := range groupIDs {
+		// log.Printf("topic = %s, groupID = %s\n\n", topic, groupID)
+
+		b.testConsumeSequentiallyInSameConsumeGroup(t, consumeFunc, topic, partitions, groupID, expectedMessageMap)
+	}
+}
+
+func (b *TestSuite) testConsumeSequentiallyInSameConsumeGroup(t *testing.T, consumeFunc func(c mq.Consumer) (mq.Message, error), topic string, partitions int, groupID string, expectedMessageMap map[int64][]mq.Message) {
+	_, consumers := b.newProducersAndConsumers(t, topic, partitions, producerInfo{}, consumerInfo{Num: partitions, GroupID: groupID})
+	// sendMessage := newExpectedMessages("redis", "mysql", "mongodb", "es", "mq", "gin")
+
+	// log.Printf("topic = %s, partitions = %d, groupID = %s, consumerNum = %d, %#v\n\n", topic, partitions, groupID, len(consumers), expectedMessageMap)
+	var eg errgroup.Group
+	for _, c := range consumers {
+		c := c
+		eg.Go(func() error {
+			n, partition := 0, int64(0)
+			actualMessages := make([]mq.Message, 0)
+			for {
+				actualMessage, err := consumeFunc(c)
+				if err != nil {
+					return err
+				}
+				actualMessages = append(actualMessages, actualMessage)
+				n++
+				if n == len(expectedMessageMap[actualMessage.Partition]) {
+					partition = actualMessage.Partition
+					break
+				}
+			}
+			// groupID := groupID
+			// log.Printf("%s, %#v\n\n", groupID, actualMessages)
+			assertMessageEqual(t, actualMessages, expectedMessageMap[partition], true)
+			return nil
+		})
+	}
+
+	require.NoError(t, eg.Wait())
 }
 
 func (b *TestSuite) TestConsumer_Consume() {
@@ -728,25 +736,80 @@ func (b *TestSuite) TestConsumer_Consume() {
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
-	// 同一Topic, 单分区:
-	// Close()前
-	// 		1)并发获取,正常获取消息, 消息与produce的一样
-	// 		2) 单个Consumer, 超时返回错误
-	// 同一Topic, 多分区:
-	//      1)多个并发获取, 正常获取消息, 消息与produce的一样
-	//      2) 多个
+	t.Run("相通消费者组", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("单分区_分区内顺序消费", func(t *testing.T) {
+			t.Parallel()
+
+			topic22, partitions := "topic22", 1
+			groupID := "c1"
+			consumeFunc := func(c mq.Consumer) (mq.Message, error) {
+				message, err := c.Consume(context.Background())
+				if err != nil {
+					return mq.Message{}, err
+				}
+				return *message, err
+			}
+			b.testConsumeSequentially(t, consumeFunc, topic22, partitions, groupID)
+		})
+
+		t.Run("多分区_分区内顺序消费_分区间无序_消费者个数必须与分区数相等", func(t *testing.T) {
+			t.Parallel()
+
+			topic23, partitions := "topic23", 3
+			groupID := "c1"
+			consumeFunc := func(c mq.Consumer) (mq.Message, error) {
+				message, err := c.Consume(context.Background())
+				if err != nil {
+					return mq.Message{}, err
+				}
+				return *message, err
+			}
+			b.testConsumeSequentially(t, consumeFunc, topic23, partitions, groupID)
+		})
+	})
+
+	t.Run("不同消费者组", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("单分区_分区内顺序消费_消费组间互不影响", func(t *testing.T) {
+			t.Parallel()
+
+			topic24, partitions := "topic24", 1
+			groupIDs := []string{"c1", "c2"}
+			consumeFunc := func(c mq.Consumer) (mq.Message, error) {
+				message, err := c.Consume(context.Background())
+				if err != nil {
+					return mq.Message{}, err
+				}
+				return *message, err
+			}
+			b.testConsumeSequentially(t, consumeFunc, topic24, partitions, groupIDs...)
+		})
+
+		t.Run("多分区_分区内顺序消费_分区间无序_消费组间互不影响_消费者个数必须与分区数相等", func(t *testing.T) {
+			t.Parallel()
+
+			topic25, partitions := "topic25", 3
+			groupIDs := []string{"c1", "c2", "c3"}
+			consumeFunc := func(c mq.Consumer) (mq.Message, error) {
+				message, err := c.Consume(context.Background())
+				if err != nil {
+					return mq.Message{}, err
+				}
+				return *message, err
+			}
+			b.testConsumeSequentially(t, consumeFunc, topic25, partitions, groupIDs...)
+		})
+	})
 }
 
-func newExpectedMessages(messageGroup [][]string, withSpecifiedPartition bool) []mq.Message {
-	res := make([]mq.Message, 0, len(messageGroup)*len(messageGroup[0]))
-	for partition, messages := range messageGroup {
-		for _, message := range messages {
-			m := mq.Message{Value: []byte(message)}
-			if withSpecifiedPartition {
-				m.Partition = int64(partition)
-			}
-			res = append(res, m)
-		}
+func newExpectedMessages(messages ...string) []mq.Message {
+	res := make([]mq.Message, 0, len(messages))
+	for _, message := range messages {
+		m := mq.Message{Value: []byte(message)}
+		res = append(res, m)
 	}
 	return res
 }
@@ -763,683 +826,5 @@ func assertMessageEqual(t *testing.T, actualMessages []mq.Message, expectedMessa
 		}
 	}
 	require.ElementsMatch(t, actualMessages, expectedMessages)
-}
-
-/*
-// 测试消费组
-
-	func (b *TestSuite) TestConsumer_ConsumerGroup() {
-		t := b.T()
-		testcases := []struct {
-			name        string
-			topic       string
-			partitions  int64
-			input       []*mq.Message
-			consumers   func(mqm mq.MQ) []mq.Consumer
-			consumeFunc func(c mq.Consumer, ch chan *mq.Message)
-			wantVal     []*mq.Message
-		}{
-			// {
-			// 	name:       "多个消费组订阅同一个Topic,消费组之间可以重复消费消息",
-			// 	topic:      "test_topic1",
-			// 	partitions: 1,
-			// 	input: []*mq.Message{
-			// 		{
-			// 			Value: []byte("1"),
-			// 			Key:   []byte("1"),
-			// 		},
-			// 		{
-			// 			Value: []byte("2"),
-			// 			Key:   []byte("2"),
-			// 		},
-			// 	},
-			// 	consumers: func(mqm mq.MQ) []mq.Consumer {
-			// 		c11, err := mqm.Consumer("test_topic1", "c1")
-			// 		require.NoError(b.T(), err)
-			// 		c21, err := mqm.Consumer("test_topic1", "c2")
-			// 		require.NoError(b.T(), err)
-			// 		return []mq.Consumer{
-			// 			c11,
-			// 			c21,
-			// 		}
-			// 	},
-			// 	consumeFunc: func(c mq.Consumer, ch chan *mq.Message) {
-			// 		msgCh, err := c.ConsumeChan(context.Background())
-			// 		require.NoError(b.T(), err)
-			// 		for val := range msgCh {
-			// 			ch <- val
-			// 		}
-			// 	},
-			// 	wantVal: []*mq.Message{
-			// 		{
-			// 			Value: []byte("1"),
-			// 			Key:   []byte("1"),
-			// 			Topic: "test_topic1",
-			// 		},
-			// 		{
-			// 			Value: []byte("2"),
-			// 			Key:   []byte("2"),
-			// 			Topic: "test_topic1",
-			// 		},
-			// 		{
-			// 			Value: []byte("1"),
-			// 			Key:   []byte("1"),
-			// 			Topic: "test_topic1",
-			// 		},
-			// 		{
-			// 			Value: []byte("2"),
-			// 			Key:   []byte("2"),
-			// 			Topic: "test_topic1",
-			// 		},
-			// 	},
-			// },
-			{
-				name:       "同一消费者组内,各个消费者竞争消费消息",
-				topic:      "test_topic2",
-				partitions: 4,
-				input: []*mq.Message{
-					{
-						Value: []byte("1"),
-						Key:   []byte("1"),
-					},
-					{
-						Value: []byte("2"),
-						Key:   []byte("2"),
-					},
-					{
-						Value: []byte("3"),
-						Key:   []byte("3"),
-					},
-					{
-						Value: []byte("4"),
-						Key:   []byte("4"),
-					},
-					{
-						Value: []byte("5"),
-						Key:   []byte("5"),
-					},
-				},
-				consumers: func(mqm mq.MQ) []mq.Consumer {
-					c11, err := mqm.Consumer("test_topic2", "c1")
-					require.NoError(b.T(), err)
-					c12, err := mqm.Consumer("test_topic2", "c1")
-					require.NoError(b.T(), err)
-					c13, err := mqm.Consumer("test_topic2", "c1")
-					require.NoError(b.T(), err)
-					c14, err := mqm.Consumer("test_topic2", "c1")
-					require.NoError(b.T(), err)
-					c15, err := mqm.Consumer("test_topic2", "c1")
-					require.NoError(b.T(), err)
-					c16, err := mqm.Consumer("test_topic2", "c1")
-					require.NoError(b.T(), err)
-					return []mq.Consumer{
-						c11,
-						c12,
-						c13,
-						c14,
-						c15,
-						c16,
-					}
-				},
-				consumeFunc: func(c mq.Consumer, ch chan *mq.Message) {
-					msgCh, err := c.ConsumeChan(context.Background())
-					require.NoError(t, err)
-					for val := range msgCh {
-						ch <- val
-					}
-				},
-				wantVal: []*mq.Message{
-					{
-						Value: []byte("1"),
-						Key:   []byte("1"),
-						Topic: "test_topic2",
-					},
-					{
-						Value: []byte("2"),
-						Key:   []byte("2"),
-						Topic: "test_topic2",
-					},
-					{
-						Value: []byte("3"),
-						Key:   []byte("3"),
-						Topic: "test_topic2",
-					},
-					{
-						Value: []byte("4"),
-						Key:   []byte("4"),
-						Topic: "test_topic2",
-					},
-					{
-						Value: []byte("5"),
-						Key:   []byte("5"),
-						Topic: "test_topic2",
-					},
-				},
-			},
-		}
-		for _, tc := range testcases {
-			tc := tc
-			t.Run(tc.name, func(t *testing.T) {
-				// t.Parallel()
-
-				err := b.messageQueue.CreateTopic(context.Background(), tc.topic, int(tc.partitions))
-				require.NoError(t, err)
-				p, err := b.messageQueue.Producer(tc.topic)
-				require.NoError(t, err)
-				consumers := tc.consumers(b.messageQueue)
-				var wg sync.WaitGroup
-				ch := make(chan *mq.Message, 64)
-				for _, c := range consumers {
-					newc := c
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						tc.consumeFunc(newc, ch)
-					}()
-				}
-				for _, msg := range tc.input {
-					_, err := p.Produce(context.Background(), msg)
-					require.NoError(t, err)
-				}
-				ans := make([]*mq.Message, 0)
-				for {
-					log.Println("for .....", len(ans))
-					ans = append(ans, <-ch)
-					if len(ans) == len(tc.wantVal) {
-						err = closeConsumerAndProducer(consumers, []mq.Producer{p})
-						require.NoError(t, err)
-						break
-					}
-				}
-
-				log.Println("before wait")
-				wg.Wait()
-				ansMsg := genMsg(ans, false)
-				assert.ElementsMatch(t, tc.wantVal, ansMsg)
-			})
-		}
-	}
-
-// 测试同一partition下的顺序
-
-	func (b *TestSuite) TestMQConsumer_OrderOfMessagesWithinAPartition() {
-		testcases := []struct {
-			name         string
-			topic        string
-			partitions   int64
-			input        []*mq.Message
-			consumers    func(mqm mq.MQ) []mq.Consumer
-			consumerFunc func(c mq.Consumer, ch chan *mq.Message)
-			wantVal      []*mq.Message
-		}{
-			{
-				name:       "消息有序",
-				topic:      "test_topic3",
-				partitions: 3,
-				input: []*mq.Message{
-					{
-						Key:   []byte("1"),
-						Value: []byte("1"),
-					},
-					{
-						Key:   []byte("1"),
-						Value: []byte("2"),
-					},
-					{
-						Key:   []byte("1"),
-						Value: []byte("3"),
-					},
-					{
-						Key:   []byte("1"),
-						Value: []byte("4"),
-					},
-					{
-						Key:   []byte("4"),
-						Value: []byte("5"),
-					},
-					{
-						Key:   []byte("4"),
-						Value: []byte("6"),
-					},
-					{
-						Key:   []byte("4"),
-						Value: []byte("7"),
-					},
-					{
-						Key:   []byte("4"),
-						Value: []byte("8"),
-					},
-				},
-				consumers: func(mqm mq.MQ) []mq.Consumer {
-					c11, err := mqm.Consumer("test_topic3", "c1")
-					require.NoError(b.T(), err)
-					return []mq.Consumer{
-						c11,
-					}
-				},
-				consumerFunc: func(c mq.Consumer, ch chan *mq.Message) {
-					msgCh, err := c.ConsumeChan(context.Background())
-					require.NoError(b.T(), err)
-					for val := range msgCh {
-						ch <- val
-					}
-				},
-				wantVal: []*mq.Message{
-					{
-						Value: []byte("1"),
-						Key:   []byte("1"),
-						Topic: "test_topic3",
-					},
-					{
-						Value: []byte("2"),
-						Key:   []byte("1"),
-						Topic: "test_topic3",
-					},
-					{
-						Value: []byte("3"),
-						Key:   []byte("1"),
-						Topic: "test_topic3",
-					},
-					{
-						Value: []byte("4"),
-						Key:   []byte("1"),
-						Topic: "test_topic3",
-					},
-					{
-						Value: []byte("5"),
-						Key:   []byte("4"),
-						Topic: "test_topic3",
-					},
-					{
-						Value: []byte("6"),
-						Key:   []byte("4"),
-						Topic: "test_topic3",
-					},
-					{
-						Value: []byte("7"),
-						Key:   []byte("4"),
-						Topic: "test_topic3",
-					},
-					{
-						Value: []byte("8"),
-						Key:   []byte("4"),
-						Topic: "test_topic3",
-					},
-				},
-			},
-		}
-		for _, tc := range testcases {
-			b.T().Run(tc.name, func(t *testing.T) {
-				mqm := b.messageQueue
-				err := mqm.CreateTopic(context.Background(), tc.topic, int(tc.partitions))
-				require.NoError(t, err)
-				p, err := mqm.Producer(tc.topic)
-				require.NoError(t, err)
-				consumers := tc.consumers(mqm)
-				var wg sync.WaitGroup
-				ch := make(chan *mq.Message, 64)
-				for _, c := range consumers {
-					newc := c
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						tc.consumerFunc(newc, ch)
-					}()
-				}
-				for _, msg := range tc.input {
-					_, err := p.ProduceWithPartition(context.Background(), msg, 0)
-					require.NoError(t, err)
-				}
-				for {
-					if len(ch) == len(tc.wantVal) {
-						err = closeConsumerAndProducer(consumers, []mq.Producer{p})
-						require.NoError(t, err)
-						break
-					}
-				}
-				wg.Wait()
-				ans := getMsgFromChannel(ch)
-				ansMsg := genMsg(ans, false)
-				wantMap := getMsgMap(tc.wantVal)
-				actualMap := getMsgMap(ansMsg)
-				assert.Equal(t, wantMap, actualMap)
-			})
-		}
-	}
-
-// 测试发送到指定分区
-
-	func (b *TestSuite) TestMQProducer_ProduceWithSpecifiedPartitionID() {
-		type ProducerMsg struct {
-			partition int32
-			msg       *mq.Message
-		}
-
-		testcases := []struct {
-			name         string
-			topic        string
-			partitions   int64
-			input        []ProducerMsg
-			consumerFunc func(c mq.Consumer, ch chan *mq.Message)
-			wantVal      []*mq.Message
-		}{
-			{
-				name:       "生产消息到指定分区",
-				topic:      "test_topic4",
-				partitions: 4,
-				input: []ProducerMsg{
-					{
-						partition: 0,
-						msg: &mq.Message{
-							Key:   []byte("1"),
-							Value: []byte("1"),
-						},
-					},
-					{
-						partition: 1,
-						msg: &mq.Message{
-							Key:   []byte("2"),
-							Value: []byte("2"),
-						},
-					},
-					{
-						partition: 2,
-						msg: &mq.Message{
-							Key:   []byte("3"),
-							Value: []byte("3"),
-						},
-					},
-					{
-						partition: 0,
-						msg: &mq.Message{
-							Key:   []byte("4"),
-							Value: []byte("4"),
-						},
-					},
-					{
-						partition: 1,
-						msg: &mq.Message{
-							Key:   []byte("5"),
-							Value: []byte("5"),
-						},
-					},
-					{
-						partition: 2,
-						msg: &mq.Message{
-							Key:   []byte("6"),
-							Value: []byte("6"),
-						},
-					},
-				},
-				wantVal: []*mq.Message{
-					{
-						Value:       []byte("1"),
-						Key:         []byte("1"),
-						Topic:       "test_topic4",
-						PartitionID: 0,
-					},
-					{
-						Value:       []byte("2"),
-						Key:         []byte("2"),
-						Topic:       "test_topic4",
-						PartitionID: 1,
-					},
-					{
-						Value:       []byte("3"),
-						Key:         []byte("3"),
-						Topic:       "test_topic4",
-						PartitionID: 2,
-					},
-					{
-						Value:       []byte("4"),
-						Key:         []byte("4"),
-						Topic:       "test_topic4",
-						PartitionID: 0,
-					},
-					{
-						Value:       []byte("5"),
-						Key:         []byte("5"),
-						Topic:       "test_topic4",
-						PartitionID: 1,
-					},
-					{
-						Value:       []byte("6"),
-						Key:         []byte("6"),
-						Topic:       "test_topic4",
-						PartitionID: 2,
-					},
-				},
-				consumerFunc: func(c mq.Consumer, ch chan *mq.Message) {
-					msgCh, err := c.ConsumeChan(context.Background())
-					require.NoError(b.T(), err)
-					for val := range msgCh {
-						ch <- val
-					}
-				},
-			},
-		}
-		for _, tc := range testcases {
-			b.T().Run(tc.name, func(t *testing.T) {
-				mqm := b.messageQueue
-				err := mqm.CreateTopic(context.Background(), tc.topic, int(tc.partitions))
-				require.NoError(t, err)
-				p, err := mqm.Producer(tc.topic)
-				require.NoError(t, err)
-				c, err := mqm.Consumer(tc.topic, "1")
-				require.NoError(t, err)
-				consumers := []mq.Consumer{
-					c,
-				}
-				var wg sync.WaitGroup
-				ch := make(chan *mq.Message, 64)
-				for _, c := range consumers {
-					newc := c
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						tc.consumerFunc(newc, ch)
-					}()
-				}
-				for _, msg := range tc.input {
-					_, err := p.ProduceWithPartition(context.Background(), msg.msg, msg.partition)
-					require.NoError(t, err)
-				}
-				for {
-					if len(ch) == len(tc.wantVal) {
-						err = closeConsumerAndProducer(consumers, []mq.Producer{p})
-						require.NoError(t, err)
-						break
-					}
-				}
-				wg.Wait()
-				ans := getMsgFromChannel(ch)
-				assert.ElementsMatch(t, tc.wantVal, genMsg(ans, true))
-			})
-		}
-	}
-
-// 测试producer调用close
-
-	func (b *TestSuite) TestMQProducer_Close() {
-		t := b.T()
-		topic := "test_topic5"
-		mqm := b.messageQueue
-		err := mqm.CreateTopic(context.Background(), topic, 4)
-		p, err := mqm.Producer(topic)
-		require.NoError(b.T(), err)
-		errChan := make(chan error, 10)
-		// 开启三个goroutine使用 Produce
-		var wg sync.WaitGroup
-		for i := 0; i < 3; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				err := testProducerClose(p)
-				if err != nil {
-					errChan <- err
-				}
-			}()
-		}
-		// 开启三个goroutine使用 ProducerWithPartition
-		for i := 0; i < 3; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				err := testProducerClose(p)
-				if err != nil {
-					errChan <- err
-				}
-			}()
-		}
-		err = p.Close()
-		require.NoError(t, err)
-		wg.Wait()
-		close(errChan)
-		errList := make([]error, 0, len(errChan))
-		for val := range errChan {
-			errList = append(errList, val)
-		}
-		for _, e := range errList {
-			require.True(t, errors.Is(e, mqerr.ErrProducerIsClosed))
-		}
-	}
-
-// 测试producer和consumer的并发
-
-	func (b *TestSuite) TestMQConsumer_Consume() {
-		testTopic := "test_topic7"
-		err := b.messageQueue.CreateTopic(context.Background(), testTopic, 1)
-		require.NoError(b.T(), err)
-		p, err := b.messageQueue.Producer(testTopic)
-		require.NoError(b.T(), err)
-		c, err := b.messageQueue.Consumer(testTopic, "c1")
-		// 开启3个goroutine使用p的Produce，开启3个goroutine使用p的ProduceWithPartition
-		var wg sync.WaitGroup
-		for i := 0; i < 3; i++ {
-			wg.Add(2)
-			go func() {
-				defer wg.Done()
-				msgs := genProduceMsg(3, 1, testTopic)
-				for _, msg := range msgs {
-					_, err := p.Produce(context.Background(), msg)
-					require.NoError(b.T(), err)
-				}
-			}()
-			go func() {
-				defer wg.Done()
-				msgs := genProduceMsg(3, 1, testTopic)
-				for _, msg := range msgs {
-					_, err := p.ProduceWithPartition(context.Background(), msg, 0)
-					require.NoError(b.T(), err)
-				}
-			}()
-		}
-		wantVal := genProduceMsg(3, 6, testTopic)
-		msgch := make(chan *mq.Message, 64)
-		// 开启3个goroutine消费数据
-		for i := 0; i < 3; i++ {
-			// 测试ConsumeChan
-			go func() {
-				ch, err := c.ConsumeChan(context.Background())
-				require.NoError(b.T(), err)
-				for val := range ch {
-					msgch <- val
-				}
-			}()
-			// 测试consumer
-			go func() {
-				msg, err := c.Consume(context.Background())
-				require.NoError(b.T(), err)
-				msgch <- msg
-			}()
-		}
-		// 等待数据生产完
-		wg.Wait()
-		// 等待数据处理
-		for {
-			if len(msgch) == len(wantVal) {
-				err = closeConsumerAndProducer([]mq.Consumer{c}, []mq.Producer{p})
-				require.NoError(b.T(), err)
-				break
-			}
-		}
-		ans := getMsgFromChannel(msgch)
-		assert.ElementsMatch(b.T(), wantVal, genMsg(ans, false))
-	}
-*/
-func genMsg(msgs []*mq.Message, hasPartitionID bool) []*mq.Message {
-	for index := range msgs {
-		if !hasPartitionID {
-			msgs[index].Partition = 0
-		}
-		msgs[index].Offset = 0
-		msgs[index].Header = nil
-	}
-	return msgs
-}
-
-func getMsgMap(msgs []*mq.Message) map[string][]*mq.Message {
-	wantMap := make(map[string][]*mq.Message, 10)
-	for _, val := range msgs {
-		_, ok := wantMap[string(val.Key)]
-		if !ok {
-			wantMap[string(val.Key)] = append([]*mq.Message{}, val)
-		} else {
-			wantMap[string(val.Key)] = append(wantMap[string(val.Key)], val)
-		}
-	}
-	return wantMap
-}
-
-func testProducerClose(p mq.Producer) error {
-	for {
-		_, err := p.Produce(context.Background(), &mq.Message{
-			Value: []byte("1"),
-		})
-		if err != nil {
-			return err
-		}
-	}
-}
-
-func closeConsumerAndProducer(consumers []mq.Consumer, producers []mq.Producer) error {
-	errList := make([]error, 0, len(consumers)+len(producers))
-	for _, c := range consumers {
-		err := c.Close()
-		if err != nil {
-			errList = append(errList, err)
-		}
-	}
-	for _, p := range producers {
-		err := p.Close()
-		if err != nil {
-			errList = append(errList, err)
-		}
-	}
-	return multierr.Combine(errList...)
-}
-
-// 生成消息
-func genProduceMsg(number int64, receiver int64, topic string) []*mq.Message {
-	list := make([]*mq.Message, 0, number)
-	for j := 0; j < int(receiver); j++ {
-		for i := 0; i < int(number); i++ {
-			list = append(list, &mq.Message{
-				Value: []byte(fmt.Sprintf("%d", i)),
-				Key:   []byte(fmt.Sprintf("%d", i)),
-				Topic: topic,
-			})
-		}
-	}
-
-	return list
-}
-
-func getMsgFromChannel(ch chan *mq.Message) []*mq.Message {
-	list := make([]*mq.Message, 0, len(ch))
-	chlen := len(ch)
-	for i := 0; i < chlen; i++ {
-		list = append(list, <-ch)
-	}
-	return list
+	// log.Println("assertMessageEqual true")
 }
