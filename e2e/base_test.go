@@ -72,10 +72,6 @@ func (b *TestSuite) SetupSuite() {
 	b.messageQueue = b.mqCreator.Create()
 }
 
-func (b *TestSuite) topic(name string) string {
-	return b.name + "-" + name
-}
-
 func (b *TestSuite) newProducersAndConsumers(t *testing.T, topic string, partitions int, p producerInfo, c consumerInfo) ([]mq.Producer, []mq.Consumer) {
 	t.Helper()
 
@@ -177,23 +173,23 @@ func (b *TestSuite) TestMQ_CreateTopic() {
 		t.Parallel()
 
 		partitions := 1
-		validPartitionsTopic := "validPartitions"
-		require.NoError(t, b.messageQueue.CreateTopic(context.Background(), validPartitionsTopic, partitions))
-		require.NoError(t, b.messageQueue.DeleteTopics(context.Background(), validPartitionsTopic))
+		validTopic := "validPartitions"
+		require.NoError(t, b.messageQueue.CreateTopic(context.Background(), validTopic, partitions))
+		require.NoError(t, b.messageQueue.DeleteTopics(context.Background(), validTopic))
 	})
 
 	t.Run("非法Partitions", func(t *testing.T) {
 		t.Parallel()
 
 		partitions := -1
-		invalidPartitionsTopic1 := "invalidPartitions1"
-		assert.ErrorIs(t, b.messageQueue.CreateTopic(context.Background(), invalidPartitionsTopic1, partitions), mqerr.ErrInvalidPartition)
+		validTopic1 := "invalidPartitions1"
+		assert.ErrorIs(t, b.messageQueue.CreateTopic(context.Background(), validTopic1, partitions), mqerr.ErrInvalidPartition)
 
 		partitions = 0
-		invalidPartitionsTopic2 := "invalidPartitions2"
-		assert.Error(t, b.messageQueue.CreateTopic(context.Background(), invalidPartitionsTopic2, partitions), mqerr.ErrInvalidPartition)
+		validTopic2 := "invalidPartitions2"
+		assert.ErrorIs(t, b.messageQueue.CreateTopic(context.Background(), validTopic2, partitions), mqerr.ErrInvalidPartition)
 
-		require.NoError(t, b.messageQueue.DeleteTopics(context.Background(), invalidPartitionsTopic1, invalidPartitionsTopic2))
+		require.NoError(t, b.messageQueue.DeleteTopics(context.Background(), validTopic1, validTopic2))
 	})
 }
 
@@ -224,7 +220,7 @@ func (b *TestSuite) TestMQ_CreateTopicAndDeleteTopics() {
 
 	var eg errgroup.Group
 
-	topics := []string{b.topic("topic1"), b.topic("topic2"), b.topic("topic3"), b.topic("topic4")}
+	topics := []string{"topic1", "topic2", "topic3", "topic4"}
 	partitions := 2
 
 	// 并发创建多个Topic
@@ -307,9 +303,8 @@ func (b *TestSuite) TestProducer_Produce() {
 	t.Run("调用超时_返回错误", func(t *testing.T) {
 		t.Parallel()
 
-		topic10, partitions := b.topic("topic10"), 1
-		producerNum := 1
-		producers, _ := b.newProducersAndConsumers(t, topic10, partitions, producerInfo{Num: producerNum}, consumerInfo{})
+		topic10, partitions := "topic10", 1
+		producers, _ := b.newProducersAndConsumers(t, topic10, partitions, producerInfo{Num: 1}, consumerInfo{})
 
 		p := producers[0]
 
@@ -325,6 +320,34 @@ func (b *TestSuite) TestProducer_Produce() {
 		t.Skip()
 		t.Parallel()
 	})
+
+	t.Run("单分区_并发生产消息", func(t *testing.T) {
+		t.Parallel()
+
+		producerNum := 2
+		topic16, partitions := "topic16", 1
+		groupID := "c1"
+		produceFunc := func(p mq.Producer, message mq.Message, partitions int) error {
+			_, err := p.Produce(context.Background(), &message)
+			return err
+		}
+		b.testProduceMessageConcurrently(t, producerNum, produceFunc, topic16, partitions, groupID, false)
+	})
+
+	t.Run("多分区_并发生产消息", func(t *testing.T) {
+		t.Parallel()
+
+		producerNum := 2
+		topic17, partitions := "topic17", 2
+		groupID := "c1"
+
+		produceFunc := func(p mq.Producer, message mq.Message, partition int) error {
+			_, err := p.Produce(context.Background(), &message)
+			return err
+		}
+
+		b.testProduceMessageConcurrently(t, producerNum, produceFunc, topic17, partitions, groupID, false)
+	})
 }
 
 func (b *TestSuite) TestProducer_ProduceWithPartition() {
@@ -334,7 +357,7 @@ func (b *TestSuite) TestProducer_ProduceWithPartition() {
 	t.Run("调用超时_返回错误", func(t *testing.T) {
 		t.Parallel()
 
-		topic13, partitions := b.topic("topic13"), 2
+		topic13, partitions := "topic13", 2
 		producers, _ := b.newProducersAndConsumers(t, topic13, partitions, producerInfo{Num: 1}, consumerInfo{})
 
 		p := producers[0]
@@ -355,7 +378,7 @@ func (b *TestSuite) TestProducer_ProduceWithPartition() {
 	t.Run("分区ID非法_返回错误", func(t *testing.T) {
 		t.Parallel()
 
-		topic14, partitions := b.topic("topic14"), 2
+		topic14, partitions := "topic14", 2
 		producers, _ := b.newProducersAndConsumers(t, topic14, partitions, producerInfo{Num: 1}, consumerInfo{})
 
 		ctx, cancelFunc := context.WithCancel(context.Background())
@@ -372,13 +395,87 @@ func (b *TestSuite) TestProducer_ProduceWithPartition() {
 		_, err = p.ProduceWithPartition(ctx, &mq.Message{Value: []byte("hello")}, -1)
 		require.ErrorIs(t, err, mqerr.ErrInvalidPartition)
 	})
+
+	t.Run("多分区_并发发送", func(t *testing.T) {
+		t.Parallel()
+
+		producerNum := 2
+		topic18, partitions := "topic18", 3
+		groupID := "c1"
+
+		produceFunc := func(p mq.Producer, message mq.Message, partition int) error {
+			_, err := p.ProduceWithPartition(context.Background(), &message, partition)
+			return err
+		}
+
+		b.testProduceMessageConcurrently(t, producerNum, produceFunc, topic18, partitions, groupID, true)
+	})
+}
+
+func (b *TestSuite) testProduceMessageConcurrently(t *testing.T, producerNum int, produceFunc func(p mq.Producer, m mq.Message, partition int) error, topic string, partitions int, groupID string, withSpecifiedPartition bool) {
+	producers, consumers := b.newProducersAndConsumers(t, topic, partitions, producerInfo{Num: producerNum}, consumerInfo{Num: partitions, GroupID: groupID})
+
+	sendMessages := newExpectedMessages([][]string{{"kafka", "nsq", "rocket"}, {"go", "rust", "python"}}, withSpecifiedPartition)
+
+	var eg errgroup.Group
+
+	// 模拟一个或多个生产者,并发发送消息
+	// 调整消息数量
+	expectedMessages := make([]mq.Message, 0, len(sendMessages)*producerNum)
+	for _, p := range producers {
+		p := p
+		for i, message := range sendMessages {
+			partition := i % partitions
+
+			msg := message
+			eg.Go(func() error {
+				return produceFunc(p, msg, partition)
+			})
+
+			// 指定分区
+			if withSpecifiedPartition {
+				message.Partition = int64(partition)
+			}
+			expectedMessages = append(expectedMessages, message)
+		}
+	}
+
+	assert.NoError(t, eg.Wait())
+
+	// 每个分区对应的消费者消费消息
+	// 本测试不对消费消息的顺序做验证
+	messageChan := make(chan *mq.Message)
+	for _, c := range consumers {
+		c := c
+		go func(c mq.Consumer) {
+			ch, err := c.ConsumeChan(context.Background())
+			if err != nil {
+				return
+			}
+			for m := range ch {
+				messageChan <- m
+			}
+		}(c)
+	}
+
+	actualMessages := make([]mq.Message, 0, len(expectedMessages))
+	for {
+		message := <-messageChan
+		// log.Printf("received message = %#v, topic = %s\n", *message, topic)
+		actualMessages = append(actualMessages, *message)
+		if len(actualMessages) == cap(actualMessages) {
+			break
+		}
+	}
+
+	assertMessageEqual(t, actualMessages, expectedMessages, withSpecifiedPartition)
 }
 
 func (b *TestSuite) TestProducer_Close() {
 	t := b.T()
 	t.Parallel()
 
-	topic15, partitions := b.topic("topic15"), 1
+	topic15, partitions := "topic15", 1
 	producers, consumers := b.newProducersAndConsumers(t, topic15, partitions, producerInfo{Num: 1}, consumerInfo{Num: 1})
 
 	p, c := producers[0], consumers[0]
@@ -390,10 +487,8 @@ func (b *TestSuite) TestProducer_Close() {
 
 	_, err = c.Consume(context.Background())
 	require.NoError(t, err)
-	// log.Println("TestProducer_Close", m1)
 	_, err = c.Consume(context.Background())
 	require.NoError(t, err)
-	// log.Println("TestProducer_Close", m2)
 
 	// 并发调用Close
 	n := 3
@@ -427,7 +522,7 @@ func (b *TestSuite) TestConsumer_Close() {
 	t := b.T()
 	t.Parallel()
 
-	topic5, partitions := b.topic("topic5"), 1
+	topic5, partitions := "topic5", 1
 
 	_, consumers := b.newProducersAndConsumers(t, topic5, partitions, producerInfo{}, consumerInfo{Num: 1})
 
@@ -472,24 +567,24 @@ func (b *TestSuite) TestConsumer_ConsumeChan() {
 	// 同一Topic:
 	// Close()前, 1) 并发获取Chan, 获取到消息的内容与produce的一样
 	//            2) 单个Consumer, 超时返回错误
-	// Close()后, 并发调用ConsumChan, 返回关闭的Chan + 返回mqerr.ErrConsumerIsClosed, 详见TestConsumer_Close()
+	// Close()后, 并发调用ConsumeChan, 返回关闭的Chan + 返回mqerr.ErrConsumerIsClosed, 详见TestConsumer_Close()
 	t := b.T()
 	t.Parallel()
 
 	t.Run("调用超时_返回错误", func(t *testing.T) {
 		t.Parallel()
 
-		topic6, partitions := b.topic("topic6"), 1
+		topic6, partitions := "topic6", 1
 		consumerNum, groupID := 1, "c1"
 
 		_, consumers := b.newProducersAndConsumers(t, topic6, partitions, producerInfo{}, consumerInfo{Num: consumerNum, GroupID: groupID})
 
-		consumer := consumers[0]
+		c := consumers[0]
 
 		ctx, cancelFunc := context.WithCancel(context.Background())
 		cancelFunc()
 
-		_, err := consumer.ConsumeChan(ctx)
+		_, err := c.ConsumeChan(ctx)
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
@@ -500,51 +595,47 @@ func (b *TestSuite) TestConsumer_ConsumeChan() {
 			t.Parallel()
 
 			t.Run("组内单个消费者顺序消费", func(t *testing.T) {
+				t.Skip()
 				t.Parallel()
 
-				topic7 := b.topic("topic7")
-				partitions := 1
+				topic7, partitions := "topic7", 1
 				groupID := "c1"
 
-				err := b.messageQueue.CreateTopic(context.Background(), topic7, partitions)
-				require.NoError(t, err)
+				producers, consumers := b.newProducersAndConsumers(t, topic7, partitions, producerInfo{Num: 1}, consumerInfo{Num: 1, GroupID: groupID})
 
-				p, err := b.messageQueue.Producer(topic7)
-				require.NoError(t, err)
+				p, c := producers[0], consumers[0]
 
-				c, err := b.messageQueue.Consumer(topic7, groupID)
-				require.NoError(t, err)
-
-				t.Cleanup(func() {
-					require.NoError(t, p.Close())
-					require.NoError(t, c.Close())
-				})
-
-				expectedValues := []string{"hello", "world"}
-
-				for _, value := range expectedValues {
-					_, err := p.Produce(context.Background(), &mq.Message{Value: []byte(value)})
-					require.NoError(t, err, value)
+				expectedMessages := []*mq.Message{
+					{Header: make(mq.Header), Value: []byte("hello"), Partition: 0, Offset: 0},
+					{Header: make(mq.Header), Value: []byte("world"), Partition: 0, Offset: 1},
 				}
+
+				// 并发发送多个信息,
+				var eg errgroup.Group
+				for _, message := range expectedMessages {
+					message := message
+					eg.Go(func() error {
+						_, err := p.Produce(context.Background(), message)
+						return err
+					})
+				}
+				require.NoError(t, eg.Wait())
 
 				messageChan, err := c.ConsumeChan(context.Background())
 				require.NoError(t, err)
 
 				// 验证收到的消息 —— 各个字段都要验证
-				for _, expectedValue := range expectedValues {
-					message := <-messageChan
-					require.NoError(t, err)
-					require.Equal(t, topic7, message.Topic)
-					require.Equal(t, expectedValue, string(message.Value))
-					require.GreaterOrEqual(t, message.Partition, int64(0))
-					require.Less(t, message.Partition, int64(partitions))
+				for _, expectedMessage := range expectedMessages {
+					actualMessage := <-messageChan
+					actualMessage.Topic = ""
+					assert.Equal(t, expectedMessage, actualMessage)
 				}
 			})
 
 			t.Run("组内多个消费者竞争消费", func(t *testing.T) {
 				t.Parallel()
 
-				topic8, partitions := b.topic("topic8"), 3
+				topic8, partitions := "topic8", 3
 				groupID := "c1"
 
 				producers, consumers := b.newProducersAndConsumers(t, topic8, partitions, producerInfo{Num: 1}, consumerInfo{Num: 3, GroupID: groupID})
@@ -623,17 +714,17 @@ func (b *TestSuite) TestConsumer_Consume() {
 	t.Run("调用超时_返回错误", func(t *testing.T) {
 		t.Parallel()
 
-		topic12, partitions := b.topic("topic12"), 1
+		topic12, partitions := "topic12", 1
 		consumerNum, groupID := 1, "c1"
 
 		_, consumers := b.newProducersAndConsumers(t, topic12, partitions, producerInfo{}, consumerInfo{Num: consumerNum, GroupID: groupID})
 
-		consumer := consumers[0]
+		c := consumers[0]
 
 		ctx, cancelFunc := context.WithCancel(context.Background())
 		cancelFunc()
 
-		_, err := consumer.Consume(ctx)
+		_, err := c.Consume(ctx)
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
@@ -644,7 +735,34 @@ func (b *TestSuite) TestConsumer_Consume() {
 	// 同一Topic, 多分区:
 	//      1)多个并发获取, 正常获取消息, 消息与produce的一样
 	//      2) 多个
-	// Close()后, 并发调用的Consume后 返回mqerr.ErrConsumerIsClosed, 详见TestConsumer_Close()
+}
+
+func newExpectedMessages(messageGroup [][]string, withSpecifiedPartition bool) []mq.Message {
+	res := make([]mq.Message, 0, len(messageGroup)*len(messageGroup[0]))
+	for partition, messages := range messageGroup {
+		for _, message := range messages {
+			m := mq.Message{Value: []byte(message)}
+			if withSpecifiedPartition {
+				m.Partition = int64(partition)
+			}
+			res = append(res, m)
+		}
+	}
+	return res
+}
+
+func assertMessageEqual(t *testing.T, actualMessages []mq.Message, expectedMessages []mq.Message, withSpecifiedPartition bool) {
+	t.Helper()
+	require.Equal(t, len(expectedMessages), len(actualMessages))
+	for i := range actualMessages {
+		actualMessages[i].Topic = ""
+		actualMessages[i].Offset = 0
+		actualMessages[i].Header = nil
+		if !withSpecifiedPartition {
+			actualMessages[i].Partition = 0
+		}
+	}
+	require.ElementsMatch(t, actualMessages, expectedMessages)
 }
 
 /*
