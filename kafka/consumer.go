@@ -46,7 +46,6 @@ type Consumer struct {
 
 func NewConsumer(address []string, topic, groupID string) *Consumer {
 	ctx, cancelFunc := context.WithCancel(context.Background())
-	log.Printf("create consumer: topc = %s, groupID = %s\n\n", topic, groupID)
 	return &Consumer{
 		topic:   topic,
 		groupID: groupID,
