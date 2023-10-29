@@ -40,11 +40,11 @@ e2e:
 # 启动本地研发 docker 依赖
 .PHONY: dev_3rd_up
 dev_3rd_up:
-	@docker compose -f ./scripts/deploy/dev-compose.yaml up -d
+	@docker compose -p mq-api -f ./scripts/deploy/dev-compose.yaml up -d
 
 .PHONY: dev_3rd_down
 dev_3rd_down:
-	@docker compose -f ./scripts/deploy/dev-compose.yaml down -v
+	@docker compose -p mq-api -f ./scripts/deploy/dev-compose.yaml down -v
 
 .PHONY: check
 check:
