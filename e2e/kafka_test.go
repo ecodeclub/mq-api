@@ -27,7 +27,7 @@ import (
 )
 
 func TestKafka(t *testing.T) {
-	address := []string{"127.0.0.1:9092"}
+	address := []string{"127.0.0.1:9094"}
 	suite.Run(t, NewTestSuite(KafkaCreator{address: address}))
 }
 
