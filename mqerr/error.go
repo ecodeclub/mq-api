@@ -21,5 +21,7 @@ var (
 	ErrProducerIsClosed = errors.New("生产者已经关闭")
 	ErrMQIsClosed       = errors.New("mq已经关闭")
 	ErrInvalidTopic     = errors.New("topic非法")
+	ErrCreatedTopic     = errors.New("topic已创建")
 	ErrInvalidPartition = errors.New("partition非法")
+	ErrUnknownTopic     = errors.New("未知topic")
 )

@@ -72,8 +72,7 @@ func (b *TestSuite) SetupSuite() {
 func (b *TestSuite) newProducersAndConsumers(t *testing.T, topic string, partitions int, p producerInfo, c consumerInfo) ([]mq.Producer, []mq.Consumer) {
 	t.Helper()
 
-	err := b.messageQueue.CreateTopic(context.Background(), topic, partitions)
-	require.NoError(t, err)
+	_ = b.messageQueue.CreateTopic(context.Background(), topic, partitions)
 
 	producers := make([]mq.Producer, 0, p.Num)
 	for i := 0; i < p.Num; i++ {
@@ -188,6 +187,19 @@ func (b *TestSuite) TestMQ_CreateTopic() {
 
 		require.NoError(t, b.messageQueue.DeleteTopics(context.Background(), validTopic1, validTopic2))
 	})
+
+	t.Run("重复创建Topic", func(t *testing.T) {
+		t.Parallel()
+
+		createdTopic, partitions := "createdTopic", 1
+		err := b.messageQueue.CreateTopic(context.Background(), createdTopic, partitions)
+		require.NoError(t, err, createdTopic)
+
+		err = b.messageQueue.CreateTopic(context.Background(), createdTopic, partitions)
+		require.Error(t, err)
+
+		require.NoError(t, b.messageQueue.DeleteTopics(context.Background(), createdTopic))
+	})
 }
 
 func (b *TestSuite) TestMQ_DeleteTopics() {
@@ -237,6 +249,32 @@ func (b *TestSuite) TestMQ_CreateTopicAndDeleteTopics() {
 		})
 	}
 	require.NoError(t, eg.Wait())
+}
+
+func (b *TestSuite) TestMQ_Producer() {
+	t := b.T()
+	t.Parallel()
+
+	unknownTopic := "producer_unknownTopic"
+	err := b.messageQueue.CreateTopic(context.Background(), unknownTopic, 1)
+	require.NoError(t, err)
+	require.NoError(t, b.messageQueue.DeleteTopics(context.Background(), unknownTopic))
+
+	_, err = b.messageQueue.Producer(unknownTopic)
+	require.ErrorIs(t, err, mqerr.ErrUnknownTopic)
+}
+
+func (b *TestSuite) TestMQ_Consumer() {
+	t := b.T()
+	t.Parallel()
+
+	unknownTopic, groupID := "consumer_unknownTopic", "c1"
+	err := b.messageQueue.CreateTopic(context.Background(), unknownTopic, 1)
+	require.NoError(t, err)
+	require.NoError(t, b.messageQueue.DeleteTopics(context.Background(), unknownTopic))
+
+	_, err = b.messageQueue.Consumer(unknownTopic, groupID)
+	require.ErrorIs(t, err, mqerr.ErrUnknownTopic)
 }
 
 func (b *TestSuite) TestMQ_Close() {
@@ -581,7 +619,7 @@ func (b *TestSuite) TestConsumer_ConsumeChan() {
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
-	t.Run("相通消费者组", func(t *testing.T) {
+	t.Run("相同消费者组", func(t *testing.T) {
 		t.Parallel()
 
 		t.Run("单分区_分区内顺序消费", func(t *testing.T) {
@@ -736,7 +774,7 @@ func (b *TestSuite) TestConsumer_Consume() {
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
-	t.Run("相通消费者组", func(t *testing.T) {
+	t.Run("相同消费者组", func(t *testing.T) {
 		t.Parallel()
 
 		t.Run("单分区_分区内顺序消费", func(t *testing.T) {
