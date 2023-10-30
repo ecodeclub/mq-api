@@ -91,6 +91,10 @@ func (m *MQ) CreateTopic(ctx context.Context, name string, partitions int) error
 		return ctx.Err()
 	}
 
+	if _, ok := m.topicConfigMapping[name]; ok {
+		return fmt.Errorf("kafka: %w", mqerr.ErrCreatedTopic)
+	}
+
 	m.topicConfigMapping[name] = kafkago.TopicConfig{Topic: name, NumPartitions: partitions, ReplicationFactor: m.replicationFactor}
 	return m.controllerConn.CreateTopics(m.topicConfigMapping[name])
 }
@@ -106,6 +110,10 @@ func (m *MQ) DeleteTopics(ctx context.Context, topics ...string) error {
 
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+
+	for _, topic := range topics {
+		delete(m.topicConfigMapping, topic)
 	}
 
 	err := m.controllerConn.DeleteTopics(topics...)
@@ -124,6 +132,10 @@ func (m *MQ) Producer(topic string) (mq.Producer, error) {
 		return nil, fmt.Errorf("kafka: %w", mqerr.ErrMQIsClosed)
 	}
 
+	if _, ok := m.topicConfigMapping[topic]; !ok {
+		return nil, fmt.Errorf("kafka: %w", mqerr.ErrUnknownTopic)
+	}
+
 	balancer, _ := NewSpecifiedPartitionBalancer(&kafkago.Hash{})
 	p := NewProducer(m.address, topic, m.topicConfigMapping[topic].NumPartitions, balancer)
 	m.producers = append(m.producers, p)
@@ -136,6 +148,10 @@ func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 
 	if m.closed {
 		return nil, fmt.Errorf("kafka: %w", mqerr.ErrMQIsClosed)
+	}
+
+	if _, ok := m.topicConfigMapping[topic]; !ok {
+		return nil, fmt.Errorf("kafka: %w", mqerr.ErrUnknownTopic)
 	}
 
 	c := NewConsumer(m.address, topic, groupID)
@@ -157,6 +173,7 @@ func (m *MQ) Close() error {
 		for _, c := range m.consumers {
 			errorList = append(errorList, c.Close())
 		}
+		errorList = append(errorList, m.controllerConn.Close())
 		m.closeErr = multierr.Combine(errorList...)
 
 		m.closed = true
