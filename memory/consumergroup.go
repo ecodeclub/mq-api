@@ -2,13 +2,14 @@ package memory
 
 import (
 	"fmt"
-	"github.com/ecodeclub/ekit/syncx"
-	"github.com/ecodeclub/mq-api"
-	"github.com/pkg/errors"
 	"log"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ecodeclub/ekit/syncx"
+	"github.com/ecodeclub/mq-api"
+	"github.com/pkg/errors"
 )
 
 var ErrReportOffsetFail = errors.New("非平衡状态，无法上报偏移量")
@@ -119,7 +120,6 @@ func (c *ConsumerGroup) ExitGroup(name string, closeCh chan struct{}) {
 			return
 		}
 	}
-
 }
 
 // ReportOffset 上报偏移量
@@ -131,7 +131,6 @@ func (c *ConsumerGroup) ReportOffset(records []PartitionRecord) error {
 		c.partitionRecords.Store(record.Index, record)
 	}
 	return nil
-
 }
 
 func (c *ConsumerGroup) Close() {
@@ -202,7 +201,6 @@ func (c *ConsumerGroup) reBalance() {
 		}
 	}
 	log.Println("重平衡结束")
-
 }
 
 // JoinGroup 加入消费组

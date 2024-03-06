@@ -40,6 +40,7 @@ func NewTopic(name string, partitions int) *Topic {
 	t.partitions = partitionList
 	return t
 }
+
 func (t *Topic) addProducer(producer mq.Producer) error {
 	t.locker.Lock()
 	defer t.locker.Unlock()

@@ -3,9 +3,10 @@ package memory
 import (
 	"context"
 	"fmt"
-	"github.com/ecodeclub/mq-api/internal/pkg/validator"
 	"log"
 	"sync"
+
+	"github.com/ecodeclub/mq-api/internal/pkg/validator"
 
 	"github.com/ecodeclub/ekit/syncx"
 	"github.com/ecodeclub/mq-api"
@@ -90,7 +91,7 @@ func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 		}
 		// 初始化分区消费进度
 		partitionRecords := syncx.Map[int, PartitionRecord]{}
-		for idx, _ := range t.partitions {
+		for idx := range t.partitions {
 			partitionRecords.Store(idx, PartitionRecord{
 				Index:  idx,
 				Cursor: 0,

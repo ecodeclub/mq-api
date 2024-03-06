@@ -2,8 +2,9 @@ package memory
 
 import (
 	"context"
-	"github.com/ecodeclub/mq-api/mqerr"
 	"sync"
+
+	"github.com/ecodeclub/mq-api/mqerr"
 
 	"github.com/ecodeclub/mq-api"
 )

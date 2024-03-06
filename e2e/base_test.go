@@ -18,13 +18,14 @@ package e2e
 
 import (
 	"context"
-	"github.com/ecodeclub/mq-api/mqerr"
-	"github.com/stretchr/testify/assert"
-	"golang.org/x/sync/errgroup"
 	"log"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ecodeclub/mq-api/mqerr"
+	"github.com/stretchr/testify/assert"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ecodeclub/mq-api"
 	"github.com/stretchr/testify/require"
