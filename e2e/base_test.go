@@ -18,17 +18,17 @@ package e2e
 
 import (
 	"context"
+	"github.com/ecodeclub/mq-api/mqerr"
+	"github.com/stretchr/testify/assert"
+	"golang.org/x/sync/errgroup"
 	"log"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ecodeclub/mq-api"
-	"github.com/ecodeclub/mq-api/mqerr"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"golang.org/x/sync/errgroup"
 )
 
 type MQCreator interface {
@@ -309,7 +309,6 @@ func (b *TestSuite) TestMQ_Close() {
 
 	_, err = p.ProduceWithPartition(context.Background(), &mq.Message{}, partitions-1)
 	require.ErrorIs(t, err, mqerr.ErrProducerIsClosed)
-
 	// 调用consumer上的方法会返回ErrConsumerIsClosed
 	_, err = c.ConsumeChan(context.Background())
 	require.ErrorIs(t, err, mqerr.ErrConsumerIsClosed)
@@ -417,7 +416,7 @@ func (b *TestSuite) TestProducer_ProduceWithPartition() {
 		producers, _ := b.newProducersAndConsumers(t, topic14, partitions, producerInfo{Num: 1}, consumerInfo{})
 
 		ctx, cancelFunc := context.WithCancel(context.Background())
-		cancelFunc()
+		defer cancelFunc()
 
 		p := producers[0]
 
