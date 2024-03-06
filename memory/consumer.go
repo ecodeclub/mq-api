@@ -72,7 +72,6 @@ func (c *Consumer) Run() {
 						ErrChan: errCh,
 					},
 				}
-				log.Printf("获取是否消费成功", c.name)
 				err := <-errCh
 				if err != nil {
 					log.Printf("上报偏移量失败：%v", err)
@@ -83,11 +82,9 @@ func (c *Consumer) Run() {
 			}
 			log.Printf("消费者 %s 结束消费数据", c.name)
 		case event, ok := <-c.receiveCh:
-			log.Println(ok, "xxxxxxxxxxxxooooooooooo", c.name)
 			if !ok {
 				return
 			}
-			log.Println(event.Type, "xxxxxxxxxxxx", c.name)
 			// 处理各种事件
 			c.Handle(event)
 		}
