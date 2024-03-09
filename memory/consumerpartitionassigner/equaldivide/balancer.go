@@ -26,7 +26,6 @@ func (b *Balancer) AssignPartition(consumers []string, partitions int) map[strin
 	for _, consumer := range consumers {
 		result[consumer] = make([]int, 0)
 	}
-
 	// 平均分配 partitions
 	partitionIndex := 0
 	for i := 0; i < consumerCount; i++ {
@@ -43,7 +42,6 @@ func (b *Balancer) AssignPartition(consumers []string, partitions int) map[strin
 			partitionIndex++
 		}
 	}
-
 	return result
 }
 

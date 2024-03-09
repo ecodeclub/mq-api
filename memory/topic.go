@@ -1,3 +1,17 @@
+// Copyright 2021 ecodeclub
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package memory
 
 import (
@@ -54,11 +68,13 @@ func (t *Topic) addProducer(producer mq.Producer) error {
 // addMessage 往分区里面添加消息
 func (t *Topic) addMessage(msg *mq.Message, partition ...int64) error {
 	var partitionID int64
-	if len(partition) == 0 {
-		partitionID = t.partitionIDGetter.GetPartitionId(string(msg.Key))
-	} else if len(partition) == 1 {
+	partitionLen := len(partition)
+	switch partitionLen {
+	case 0:
+		partitionID = t.partitionIDGetter.GetPartitionID(string(msg.Key))
+	case 1:
 		partitionID = partition[0]
-	} else {
+	default:
 		return mqerr.ErrInvalidPartition
 	}
 	if partitionID < 0 || int(partitionID) >= len(t.partitions) {

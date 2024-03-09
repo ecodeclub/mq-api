@@ -1,3 +1,17 @@
+// Copyright 2021 ecodeclub
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package memory
 
 import (
@@ -12,6 +26,8 @@ import (
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/mqerr"
 )
+
+const defaultBalanceChLen = 10
 
 type MQ struct {
 	locker sync.RWMutex
@@ -86,7 +102,7 @@ func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 			consumers:                 syncx.Map[string, *ConsumerMetaData]{},
 			consumerPartitionBalancer: t.consumerPartitionBalancer,
 			partitions:                t.partitions,
-			balanceCh:                 make(chan struct{}, 10),
+			balanceCh:                 make(chan struct{}, defaultBalanceChLen),
 			status:                    StatusStable,
 		}
 		// 初始化分区消费进度
@@ -97,7 +113,7 @@ func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 				Cursor: 0,
 			})
 		}
-		group.partitionRecords = partitionRecords
+		group.partitionRecords = &partitionRecords
 	}
 	consumer := group.JoinGroup()
 	t.consumerGroups.Store(groupID, group)
