@@ -34,7 +34,7 @@ ut:
 e2e:
 	@make dev_3rd_down
 	@make dev_3rd_up
-	@go test -tags=e2e -race -cover -coverprofile=e2e.out -failfast -shuffle=on ./e2e/...
+	@go test -tags=e2e -race -cover -coverprofile=e2e.out -failfast -shuffle=on ./internal/e2e/...
 	@make dev_3rd_down
 
 # 启动本地研发 docker 依赖
