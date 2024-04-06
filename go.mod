@@ -1,6 +1,6 @@
 module github.com/ecodeclub/mq-api
 
-go 1.21.0
+go 1.21
 
 require (
 	github.com/ecodeclub/ekit v0.0.8

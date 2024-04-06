@@ -21,18 +21,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ecodeclub/mq-api/internal/errs"
+
 	"github.com/ecodeclub/ekit/retry"
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/kafka/common"
-	"github.com/ecodeclub/mq-api/mqerr"
 	"github.com/pkg/errors"
 	kafkago "github.com/segmentio/kafka-go"
 )
 
 type Producer struct {
-	topic      string
-	partitions int
-
+	topic  string
 	writer *kafkago.Writer
 	locker *sync.RWMutex
 
@@ -41,11 +40,10 @@ type Producer struct {
 	closeErr  error
 }
 
-func NewProducer(address []string, topic string, partitions int, balancer kafkago.Balancer) *Producer {
+func NewProducer(address []string, topic string, balancer kafkago.Balancer) *Producer {
 	return &Producer{
-		topic:      topic,
-		partitions: partitions,
-		locker:     &sync.RWMutex{},
+		topic:  topic,
+		locker: &sync.RWMutex{},
 		writer: &kafkago.Writer{
 			Addr:     kafkago.TCP(address...),
 			Topic:    topic,
@@ -60,10 +58,8 @@ func (p *Producer) Produce(ctx context.Context, m *mq.Message) (*mq.ProducerResu
 	return p.produce(ctx, m, nil)
 }
 
+// ProduceWithPartition 并没有校验 partition 的正确性。
 func (p *Producer) ProduceWithPartition(ctx context.Context, m *mq.Message, partition int) (*mq.ProducerResult, error) {
-	if partition < 0 || partition >= p.partitions {
-		return nil, fmt.Errorf("kafka: %w", mqerr.ErrInvalidPartition)
-	}
 	return p.produce(ctx, m, metaMessage{SpecifiedPartitionKey: partition})
 }
 
@@ -84,7 +80,7 @@ func (p *Producer) produce(ctx context.Context, m *mq.Message, meta metaMessage)
 			return &mq.ProducerResult{}, nil
 		}
 		if errors.Is(err, io.ErrClosedPipe) {
-			return &mq.ProducerResult{}, fmt.Errorf("kafka: %w", mqerr.ErrProducerIsClosed)
+			return &mq.ProducerResult{}, fmt.Errorf("kafka: %w", errs.ErrProducerIsClosed)
 		}
 		// 控制流走到这Topic和Partition已经验证合法
 		// 要么选主阶段、要么分区在broker间移动,因此这两种情况需要重试
