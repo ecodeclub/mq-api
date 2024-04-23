@@ -24,10 +24,13 @@ import (
 
 	"github.com/ecodeclub/ekit/syncx"
 	"github.com/ecodeclub/mq-api"
-	"github.com/ecodeclub/mq-api/mqerr"
+	"github.com/ecodeclub/mq-api/internal/errs"
 )
 
-const defaultBalanceChLen = 10
+const (
+	defaultBalanceChLen = 10
+	defaultPartitions   = 3
+)
 
 type MQ struct {
 	locker sync.RWMutex
@@ -43,7 +46,7 @@ func NewMQ() mq.MQ {
 
 func (m *MQ) CreateTopic(ctx context.Context, topic string, partitions int) error {
 	if !validator.IsValidTopic(topic) {
-		return fmt.Errorf("%w: %s", mqerr.ErrInvalidTopic, topic)
+		return fmt.Errorf("%w: %s", errs.ErrInvalidTopic, topic)
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -51,16 +54,18 @@ func (m *MQ) CreateTopic(ctx context.Context, topic string, partitions int) erro
 	m.locker.Lock()
 	defer m.locker.Unlock()
 	if m.closed {
-		return mqerr.ErrMQIsClosed
-	}
-	_, ok := m.topics.Load(topic)
-	if ok {
-		return mqerr.ErrInvalidTopic
+		return errs.ErrMQIsClosed
 	}
 	if partitions <= 0 {
-		return mqerr.ErrInvalidPartition
+		return errs.ErrInvalidPartition
 	}
-	m.topics.Store(topic, NewTopic(topic, partitions))
+	_, ok := m.topics.Load(topic)
+	if !ok {
+		m.topics.Store(topic, NewTopic(topic, partitions))
+	}
+	if partitions <= 0 {
+		return errs.ErrInvalidPartition
+	}
 	return nil
 }
 
@@ -68,11 +73,11 @@ func (m *MQ) Producer(topic string) (mq.Producer, error) {
 	m.locker.Lock()
 	defer m.locker.Unlock()
 	if m.closed {
-		return nil, mqerr.ErrMQIsClosed
+		return nil, errs.ErrMQIsClosed
 	}
 	t, ok := m.topics.Load(topic)
 	if !ok {
-		return nil, mqerr.ErrUnknownTopic
+		return nil, errs.ErrInvalidTopic
 	}
 	p := &Producer{
 		locker: sync.RWMutex{},
@@ -89,11 +94,11 @@ func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 	m.locker.Lock()
 	defer m.locker.Unlock()
 	if m.closed {
-		return nil, mqerr.ErrMQIsClosed
+		return nil, errs.ErrMQIsClosed
 	}
 	t, ok := m.topics.Load(topic)
 	if !ok {
-		return nil, mqerr.ErrUnknownTopic
+		t = NewTopic(topic, defaultPartitions)
 	}
 	group, ok := t.consumerGroups.Load(groupID)
 	if !ok {
@@ -139,7 +144,7 @@ func (m *MQ) DeleteTopics(ctx context.Context, topics ...string) error {
 	m.locker.Lock()
 	defer m.locker.Unlock()
 	if m.closed {
-		return mqerr.ErrMQIsClosed
+		return errs.ErrMQIsClosed
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()

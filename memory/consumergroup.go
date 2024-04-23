@@ -32,6 +32,7 @@ const (
 	consumerCap      = 16
 	defaultEventCap  = 16
 	msgChannelLength = 1000
+	defaultSleepTime = 100 * time.Millisecond
 
 	// ExitGroup 退出信号
 	ExitGroup = "exit_group"
@@ -123,7 +124,7 @@ func (c *ConsumerGroup) ExitGroup(name string, closeCh chan struct{}) {
 	// 把自己从消费组内摘除
 	for {
 		if !atomic.CompareAndSwapInt32(&c.status, StatusStable, StatusBalancing) {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(defaultSleepTime)
 			continue
 		}
 		log.Printf("消费者 %s 准备退出消费组", name)
@@ -224,7 +225,7 @@ func (c *ConsumerGroup) reBalance() {
 func (c *ConsumerGroup) JoinGroup() *Consumer {
 	for {
 		if !atomic.CompareAndSwapInt32(&c.status, StatusStable, StatusBalancing) {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(defaultSleepTime)
 			continue
 		}
 		var length int

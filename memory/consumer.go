@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/ecodeclub/mq-api"
-	"github.com/ecodeclub/mq-api/mqerr"
+	"github.com/ecodeclub/mq-api/internal/errs"
 )
 
 const (
@@ -50,12 +50,12 @@ type Consumer struct {
 
 func (c *Consumer) Consume(ctx context.Context) (*mq.Message, error) {
 	if c.isClosed() {
-		return nil, mqerr.ErrConsumerIsClosed
+		return nil, errs.ErrConsumerIsClosed
 	}
 	select {
 	case val, ok := <-c.msgCh:
 		if !ok {
-			return nil, mqerr.ErrConsumerIsClosed
+			return nil, errs.ErrConsumerIsClosed
 		}
 		return val, nil
 	case <-ctx.Done():
@@ -133,7 +133,7 @@ func (c *Consumer) ConsumeChan(ctx context.Context) (<-chan *mq.Message, error) 
 		return nil, ctx.Err()
 	}
 	if c.isClosed() {
-		return nil, mqerr.ErrConsumerIsClosed
+		return nil, errs.ErrConsumerIsClosed
 	}
 	return c.msgCh, nil
 }

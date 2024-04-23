@@ -22,9 +22,10 @@ import (
 	"log"
 	"sync"
 
+	"github.com/ecodeclub/mq-api/internal/errs"
+
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/kafka/common"
-	"github.com/ecodeclub/mq-api/mqerr"
 	kafkago "github.com/segmentio/kafka-go"
 )
 
@@ -68,7 +69,7 @@ func (c *Consumer) Consume(ctx context.Context) (*mq.Message, error) {
 		return nil, ctx.Err()
 	case m, ok := <-c.msgCh:
 		if !ok {
-			return nil, fmt.Errorf("kafka: %w", mqerr.ErrConsumerIsClosed)
+			return nil, fmt.Errorf("kafka: %w", errs.ErrConsumerIsClosed)
 		}
 		return m, nil
 	}
@@ -76,7 +77,7 @@ func (c *Consumer) Consume(ctx context.Context) (*mq.Message, error) {
 
 func (c *Consumer) ConsumeChan(ctx context.Context) (<-chan *mq.Message, error) {
 	if c.closeCtx.Err() != nil {
-		return nil, fmt.Errorf("kafka: %w", mqerr.ErrConsumerIsClosed)
+		return nil, fmt.Errorf("kafka: %w", errs.ErrConsumerIsClosed)
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()

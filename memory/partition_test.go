@@ -1,12 +1,14 @@
 package memory
 
 import (
+	"testing"
+
 	"github.com/ecodeclub/mq-api"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func Test_Partition(t *testing.T) {
+	t.Parallel()
 	p := NewPartition()
 	for i := 0; i < 5; i++ {
 		msg := &mq.Message{Partition: int64(i)}
@@ -38,5 +40,4 @@ func Test_Partition(t *testing.T) {
 			Offset:    4,
 		},
 	}, msgs)
-
 }

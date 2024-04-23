@@ -18,7 +18,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/ecodeclub/mq-api/mqerr"
+	"github.com/ecodeclub/mq-api/internal/errs"
 
 	"github.com/ecodeclub/mq-api"
 )
@@ -35,7 +35,7 @@ func (p *Producer) Produce(ctx context.Context, m *mq.Message) (*mq.ProducerResu
 	}
 	// 将partition设为 -1，按系统分配算法分配到某个分区
 	if p.isClosed() {
-		return nil, mqerr.ErrProducerIsClosed
+		return nil, errs.ErrProducerIsClosed
 	}
 	err := p.t.addMessage(m)
 	return &mq.ProducerResult{}, err
@@ -46,7 +46,7 @@ func (p *Producer) ProduceWithPartition(ctx context.Context, m *mq.Message, part
 		return nil, ctx.Err()
 	}
 	if p.isClosed() {
-		return nil, mqerr.ErrProducerIsClosed
+		return nil, errs.ErrProducerIsClosed
 	}
 	err := p.t.addMessage(m, int64(partition))
 	return &mq.ProducerResult{}, err

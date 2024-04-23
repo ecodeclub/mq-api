@@ -21,9 +21,10 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/ecodeclub/mq-api/internal/errs"
+
 	"github.com/ecodeclub/mq-api"
 	"github.com/ecodeclub/mq-api/internal/pkg/validator"
-	"github.com/ecodeclub/mq-api/mqerr"
 	"github.com/pkg/errors"
 	kafkago "github.com/segmentio/kafka-go"
 	"go.uber.org/multierr"
@@ -41,10 +42,8 @@ type MQ struct {
 	closed   bool
 	closeErr error
 
-	// 方便释放资源
-	topicConfigMapping map[string]kafkago.TopicConfig
-	producers          []mq.Producer
-	consumers          []mq.Consumer
+	producers []mq.Producer
+	consumers []mq.Consumer
 }
 
 func NewMQ(network string, address []string) (mq.MQ, error) {
@@ -64,39 +63,34 @@ func NewMQ(network string, address []string) (mq.MQ, error) {
 		return nil, err
 	}
 	return &MQ{
-		address:            address,
-		controllerConn:     controllerConn,
-		replicationFactor:  defaultReplicationFactor,
-		topicConfigMapping: make(map[string]kafkago.TopicConfig),
+		address:           address,
+		controllerConn:    controllerConn,
+		replicationFactor: defaultReplicationFactor,
 	}, nil
 }
 
 func (m *MQ) CreateTopic(ctx context.Context, name string, partitions int) error {
 	if !validator.IsValidTopic(name) {
-		return fmt.Errorf("%w: %s", mqerr.ErrInvalidTopic, name)
+		return fmt.Errorf("%w: %s", errs.ErrInvalidTopic, name)
 	}
 
 	if partitions <= 0 {
-		return fmt.Errorf("%w: %d", mqerr.ErrInvalidPartition, partitions)
+		return fmt.Errorf("%w: %d", errs.ErrInvalidPartition, partitions)
 	}
 
 	m.locker.Lock()
 	defer m.locker.Unlock()
 
 	if m.closed {
-		return fmt.Errorf("kafka: %w", mqerr.ErrMQIsClosed)
+		return fmt.Errorf("kafka: %w", errs.ErrMQIsClosed)
 	}
 
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 
-	if _, ok := m.topicConfigMapping[name]; ok {
-		return fmt.Errorf("kafka: %w", mqerr.ErrCreatedTopic)
-	}
-
-	m.topicConfigMapping[name] = kafkago.TopicConfig{Topic: name, NumPartitions: partitions, ReplicationFactor: m.replicationFactor}
-	return m.controllerConn.CreateTopics(m.topicConfigMapping[name])
+	cfg := kafkago.TopicConfig{Topic: name, NumPartitions: partitions, ReplicationFactor: m.replicationFactor}
+	return m.controllerConn.CreateTopics(cfg)
 }
 
 // DeleteTopics 删除topic
@@ -105,15 +99,11 @@ func (m *MQ) DeleteTopics(ctx context.Context, topics ...string) error {
 	defer m.locker.Unlock()
 
 	if m.closed {
-		return fmt.Errorf("kafka: %w", mqerr.ErrMQIsClosed)
+		return fmt.Errorf("kafka: %w", errs.ErrMQIsClosed)
 	}
 
 	if ctx.Err() != nil {
 		return ctx.Err()
-	}
-
-	for _, topic := range topics {
-		delete(m.topicConfigMapping, topic)
 	}
 
 	err := m.controllerConn.DeleteTopics(topics...)
@@ -129,15 +119,11 @@ func (m *MQ) Producer(topic string) (mq.Producer, error) {
 	defer m.locker.Unlock()
 
 	if m.closed {
-		return nil, fmt.Errorf("kafka: %w", mqerr.ErrMQIsClosed)
-	}
-
-	if _, ok := m.topicConfigMapping[topic]; !ok {
-		return nil, fmt.Errorf("kafka: %w", mqerr.ErrUnknownTopic)
+		return nil, fmt.Errorf("kafka: %w", errs.ErrMQIsClosed)
 	}
 
 	balancer, _ := NewSpecifiedPartitionBalancer(&kafkago.Hash{})
-	p := NewProducer(m.address, topic, m.topicConfigMapping[topic].NumPartitions, balancer)
+	p := NewProducer(m.address, topic, balancer)
 	m.producers = append(m.producers, p)
 	return p, nil
 }
@@ -147,11 +133,7 @@ func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 	defer m.locker.Unlock()
 
 	if m.closed {
-		return nil, fmt.Errorf("kafka: %w", mqerr.ErrMQIsClosed)
-	}
-
-	if _, ok := m.topicConfigMapping[topic]; !ok {
-		return nil, fmt.Errorf("kafka: %w", mqerr.ErrUnknownTopic)
+		return nil, fmt.Errorf("kafka: %w", errs.ErrMQIsClosed)
 	}
 
 	c := NewConsumer(m.address, topic, groupID)

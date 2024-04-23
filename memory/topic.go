@@ -20,9 +20,9 @@ import (
 
 	"github.com/ecodeclub/ekit/syncx"
 	"github.com/ecodeclub/mq-api"
+	"github.com/ecodeclub/mq-api/internal/errs"
 	"github.com/ecodeclub/mq-api/memory/consumerpartitionassigner/equaldivide"
 	"github.com/ecodeclub/mq-api/memory/produceridgetter/hash"
-	"github.com/ecodeclub/mq-api/mqerr"
 )
 
 type Topic struct {
@@ -59,7 +59,7 @@ func (t *Topic) addProducer(producer mq.Producer) error {
 	t.locker.Lock()
 	defer t.locker.Unlock()
 	if t.closed {
-		return mqerr.ErrMQIsClosed
+		return errs.ErrMQIsClosed
 	}
 	t.producers = append(t.producers, producer)
 	return nil
@@ -75,10 +75,10 @@ func (t *Topic) addMessage(msg *mq.Message, partition ...int64) error {
 	case 1:
 		partitionID = partition[0]
 	default:
-		return mqerr.ErrInvalidPartition
+		return errs.ErrInvalidPartition
 	}
 	if partitionID < 0 || int(partitionID) >= len(t.partitions) {
-		return mqerr.ErrInvalidPartition
+		return errs.ErrInvalidPartition
 	}
 	msg.Topic = t.name
 	msg.Partition = partitionID
