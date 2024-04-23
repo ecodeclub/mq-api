@@ -37,17 +37,17 @@ func NewPartition() *Partition {
 	}
 }
 
-func (p *Partition) sendMsg(msg *mq.Message) {
+func (p *Partition) append(msg *mq.Message) {
 	p.locker.Lock()
 	defer p.locker.Unlock()
 	msg.Offset = int64(p.data.Len())
 	_ = p.data.Append(msg)
 }
 
-func (p *Partition) consumerMsg(cursor, limit int) []*mq.Message {
+func (p *Partition) getBatch(cursor, limit int) []*mq.Message {
 	p.locker.RLock()
 	defer p.locker.RUnlock()
-	wantLen := cursor + limit + 1
+	wantLen := cursor + limit
 	length := min(wantLen, p.data.Len())
 	res := p.data.AsSlice()[cursor:length]
 	return res

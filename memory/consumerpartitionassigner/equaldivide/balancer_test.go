@@ -30,7 +30,7 @@ func TestBalancer_AssignPartition(t *testing.T) {
 		wantAnswer map[string][]int
 	}{
 		{
-			name:      "分区书超过consumer个数",
+			name:      "分区数超过consumer个数",
 			consumers: []string{"c1", "c2", "c3", "c4"},
 			partition: 5,
 			wantAnswer: map[string][]int{
@@ -49,6 +49,16 @@ func TestBalancer_AssignPartition(t *testing.T) {
 				"c2": {1},
 				"c3": {2},
 				"c4": {},
+			},
+		},
+		{
+			name:      "分区数等于consumer个数",
+			consumers: []string{"c1", "c2", "c3"},
+			partition: 3,
+			wantAnswer: map[string][]int{
+				"c1": {0},
+				"c2": {1},
+				"c3": {2},
 			},
 		},
 	}

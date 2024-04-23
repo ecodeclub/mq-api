@@ -45,7 +45,7 @@ func NewTopic(name string, partitions int) *Topic {
 		name:                      name,
 		consumerGroups:            syncx.Map[string, *ConsumerGroup]{},
 		consumerPartitionBalancer: equaldivide.NewBalancer(),
-		partitionIDGetter:         &hash.Getter{Partition: partitions},
+		partitionIDGetter:         &hash.Getter{Partitions: partitions},
 	}
 	partitionList := make([]*Partition, 0, partitions)
 	for i := 0; i < partitions; i++ {
@@ -71,7 +71,7 @@ func (t *Topic) addMessage(msg *mq.Message, partition ...int64) error {
 	partitionLen := len(partition)
 	switch partitionLen {
 	case 0:
-		partitionID = t.partitionIDGetter.GetPartitionID(string(msg.Key))
+		partitionID = t.partitionIDGetter.PartitionID(string(msg.Key))
 	case 1:
 		partitionID = partition[0]
 	default:
@@ -82,7 +82,7 @@ func (t *Topic) addMessage(msg *mq.Message, partition ...int64) error {
 	}
 	msg.Topic = t.name
 	msg.Partition = partitionID
-	t.partitions[partitionID].sendMsg(msg)
+	t.partitions[partitionID].append(msg)
 	log.Printf("生产消息 %s,消息为 %s", t.name, msg.Value)
 	return nil
 }

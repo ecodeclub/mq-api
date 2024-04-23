@@ -17,12 +17,12 @@ package hash
 import "hash/fnv"
 
 type Getter struct {
-	Partition int
+	Partitions int
 }
 
-// GetPartitionID 暂时使用hash，保证同一个key的值，在同一个分区。
-func (g *Getter) GetPartitionID(key string) int64 {
-	return hashString(key, g.Partition)
+// PartitionID 暂时使用hash，保证同一个key的值，在同一个分区。
+func (g *Getter) PartitionID(key string) int64 {
+	return hashString(key, g.Partitions)
 }
 
 func hashString(s string, numBuckets int) int64 {

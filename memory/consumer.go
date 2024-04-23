@@ -72,7 +72,7 @@ func (c *Consumer) Run() {
 		case <-ticker.C:
 			log.Printf("消费者 %s 开始消费数据", c.name)
 			for idx, record := range c.partitionRecords {
-				msgs := c.partitions[record.Index].consumerMsg(record.Cursor, limit)
+				msgs := c.partitions[record.Index].getBatch(record.Cursor, limit)
 				for _, msg := range msgs {
 					log.Printf("消费者 %s 消费数据 %v", c.name, msg)
 					c.msgCh <- msg

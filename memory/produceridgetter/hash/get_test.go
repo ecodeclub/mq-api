@@ -26,7 +26,7 @@ func TestGetter(t *testing.T) {
 	getter := Getter{
 		3,
 	}
-	partition1 := getter.GetPartitionID("msg1")
-	partition2 := getter.GetPartitionID("msg2")
+	partition1 := getter.PartitionID("msg1")
+	partition2 := getter.PartitionID("msg1")
 	assert.Equal(t, partition1, partition2)
 }
