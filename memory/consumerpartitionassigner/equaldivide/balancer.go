@@ -14,9 +14,9 @@
 
 package equaldivide
 
-type Balancer struct{}
+type Assigner struct{}
 
-func (b *Balancer) AssignPartition(consumers []string, partitions int) map[string][]int {
+func (b *Assigner) AssignPartition(consumers []string, partitions int) map[string][]int {
 	result := make(map[string][]int)
 	consumerCount := len(consumers)
 	partitionPerConsumer := partitions / consumerCount
@@ -45,6 +45,6 @@ func (b *Balancer) AssignPartition(consumers []string, partitions int) map[strin
 	return result
 }
 
-func NewBalancer() *Balancer {
-	return &Balancer{}
+func NewAssigner() *Assigner {
+	return &Assigner{}
 }

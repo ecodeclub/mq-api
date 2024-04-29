@@ -44,11 +44,11 @@ func (p *Partition) append(msg *mq.Message) {
 	_ = p.data.Append(msg)
 }
 
-func (p *Partition) getBatch(cursor, limit int) []*mq.Message {
+func (p *Partition) getBatch(offset, limit int) []*mq.Message {
 	p.locker.RLock()
 	defer p.locker.RUnlock()
-	wantLen := cursor + limit
+	wantLen := offset + limit
 	length := min(wantLen, p.data.Len())
-	res := p.data.AsSlice()[cursor:length]
+	res := p.data.AsSlice()[offset:length]
 	return res
 }

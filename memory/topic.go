@@ -26,7 +26,6 @@ import (
 )
 
 type Topic struct {
-	// 用[]*mq.Message表示一个分区
 	locker     sync.RWMutex
 	closed     bool
 	name       string
@@ -35,8 +34,8 @@ type Topic struct {
 	// 消费组
 	consumerGroups syncx.Map[string, *ConsumerGroup]
 	// 生产消息的时候获取分区号
-	partitionIDGetter         PartitionIDGetter
-	consumerPartitionBalancer ConsumerPartitionAssigner
+	producerPartitionIDGetter PartitionIDGetter
+	consumerPartitionAssigner ConsumerPartitionAssigner
 }
 type TopicOption func(t *Topic)
 
@@ -44,8 +43,8 @@ func NewTopic(name string, partitions int) *Topic {
 	t := &Topic{
 		name:                      name,
 		consumerGroups:            syncx.Map[string, *ConsumerGroup]{},
-		consumerPartitionBalancer: equaldivide.NewBalancer(),
-		partitionIDGetter:         &hash.Getter{Partitions: partitions},
+		consumerPartitionAssigner: equaldivide.NewAssigner(),
+		producerPartitionIDGetter: &hash.Getter{Partitions: partitions},
 	}
 	partitionList := make([]*Partition, 0, partitions)
 	for i := 0; i < partitions; i++ {
@@ -66,17 +65,13 @@ func (t *Topic) addProducer(producer mq.Producer) error {
 }
 
 // addMessage 往分区里面添加消息
-func (t *Topic) addMessage(msg *mq.Message, partition ...int64) error {
-	var partitionID int64
-	partitionLen := len(partition)
-	switch partitionLen {
-	case 0:
-		partitionID = t.partitionIDGetter.PartitionID(string(msg.Key))
-	case 1:
-		partitionID = partition[0]
-	default:
-		return errs.ErrInvalidPartition
-	}
+// 发送消息 producer生成msg--->add
+func (t *Topic) addMessage(msg *mq.Message) error {
+	partitionID := t.producerPartitionIDGetter.PartitionID(string(msg.Key))
+	return t.addMessageWithPartition(msg, partitionID)
+
+}
+func (t *Topic) addMessageWithPartition(msg *mq.Message, partitionID int64) error {
 	if partitionID < 0 || int(partitionID) >= len(t.partitions) {
 		return errs.ErrInvalidPartition
 	}

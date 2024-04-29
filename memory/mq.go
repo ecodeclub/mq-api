@@ -63,9 +63,6 @@ func (m *MQ) CreateTopic(ctx context.Context, topic string, partitions int) erro
 	if !ok {
 		m.topics.Store(topic, NewTopic(topic, partitions))
 	}
-	if partitions <= 0 {
-		return errs.ErrInvalidPartition
-	}
 	return nil
 }
 
@@ -77,11 +74,11 @@ func (m *MQ) Producer(topic string) (mq.Producer, error) {
 	}
 	t, ok := m.topics.Load(topic)
 	if !ok {
-		return nil, errs.ErrInvalidTopic
+		t = NewTopic(topic, defaultPartitions)
+		m.topics.Store(topic, t)
 	}
 	p := &Producer{
-		locker: sync.RWMutex{},
-		t:      t,
+		t: t,
 	}
 	err := t.addProducer(p)
 	if err != nil {
@@ -99,13 +96,14 @@ func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 	t, ok := m.topics.Load(topic)
 	if !ok {
 		t = NewTopic(topic, defaultPartitions)
+		m.topics.Store(topic, t)
 	}
 	group, ok := t.consumerGroups.Load(groupID)
 	if !ok {
 		group = &ConsumerGroup{
 			name:                      groupID,
 			consumers:                 syncx.Map[string, *ConsumerMetaData]{},
-			consumerPartitionBalancer: t.consumerPartitionBalancer,
+			consumerPartitionBalancer: t.consumerPartitionAssigner,
 			partitions:                t.partitions,
 			balanceCh:                 make(chan struct{}, defaultBalanceChLen),
 			status:                    StatusStable,
@@ -152,7 +150,10 @@ func (m *MQ) DeleteTopics(ctx context.Context, topics ...string) error {
 	for _, t := range topics {
 		topic, ok := m.topics.Load(t)
 		if ok {
-			topic.Close()
+			err := topic.Close()
+			if err != nil {
+				log.Printf("topic: %s关闭失败 %v", t, err)
+			}
 			m.topics.Delete(t)
 		}
 

@@ -34,9 +34,9 @@ const (
 	msgChannelLength = 1000
 	defaultSleepTime = 100 * time.Millisecond
 
-	// ExitGroup 退出信号
-	ExitGroup = "exit_group"
-	// ReportOffset 上报偏移量信号
+	// ExitGroupEvent 退出事件
+	ExitGroupEvent = "exit_group"
+	// ReportOffset 上报偏移量事件
 	ReportOffset = "report_offset"
 	// Rejoin 通知consumer重新加入消费组
 	Rejoin = "rejoin"
@@ -97,7 +97,7 @@ type Event struct {
 
 func (c *ConsumerGroup) Handler(name string, event *Event) {
 	switch event.Type {
-	case ExitGroup:
+	case ExitGroupEvent:
 		closeCh, _ := event.Data.(chan struct{})
 		c.ExitGroup(name, closeCh)
 	case ReportOffset:
@@ -119,7 +119,7 @@ func (c *ConsumerGroup) Handler(name string, event *Event) {
 	}
 }
 
-// ExitGroup 退出消费组
+// ExitGroupEvent 退出消费组
 func (c *ConsumerGroup) ExitGroup(name string, closeCh chan struct{}) {
 	// 把自己从消费组内摘除
 	for {
@@ -264,7 +264,7 @@ func (c *ConsumerGroup) JoinGroup() *Consumer {
 func (c *ConsumerGroup) HandleConsumerSignals(name string, reportCh chan *Event) {
 	for event := range reportCh {
 		c.Handler(name, event)
-		if event.Type == ExitGroup {
+		if event.Type == ExitGroupEvent {
 			close(reportCh)
 			return
 		}

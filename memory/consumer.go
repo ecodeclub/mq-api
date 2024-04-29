@@ -16,7 +16,6 @@ package memory
 
 import (
 	"context"
-	"errors"
 	"log"
 	"sync"
 	"time"
@@ -31,8 +30,6 @@ const (
 	// 每个分区取数据的上限
 	limit = 25
 )
-
-var ErrConsumerClose = errors.New("消费者已关闭")
 
 type Consumer struct {
 	locker sync.RWMutex
@@ -144,7 +141,7 @@ func (c *Consumer) Close() error {
 	c.once.Do(func() {
 		c.closed = true
 		c.reportCh <- &Event{
-			Type: ExitGroup,
+			Type: ExitGroupEvent,
 			Data: c.closeCh,
 		}
 		log.Printf("消费者 %s 准备关闭", c.name)

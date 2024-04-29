@@ -22,7 +22,7 @@ import (
 
 func TestBalancer_AssignPartition(t *testing.T) {
 	t.Parallel()
-	balancer := NewBalancer()
+	balancer := NewAssigner()
 	testcases := []struct {
 		name       string
 		consumers  []string
