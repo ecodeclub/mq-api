@@ -102,8 +102,8 @@ func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 	if !ok {
 		group = &ConsumerGroup{
 			name:                      groupID,
-			consumers:                 syncx.Map[string, *ConsumerMetaData]{},
-			consumerPartitionBalancer: t.consumerPartitionAssigner,
+			consumers:                 syncx.Map[string, *Consumer]{},
+			consumerPartitionAssigner: t.consumerPartitionAssigner,
 			partitions:                t.partitions,
 			balanceCh:                 make(chan struct{}, defaultBalanceChLen),
 			status:                    StatusStable,
@@ -113,7 +113,7 @@ func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 		for idx := range t.partitions {
 			partitionRecords.Store(idx, PartitionRecord{
 				Index:  idx,
-				Cursor: 0,
+				Offset: 0,
 			})
 		}
 		group.partitionRecords = &partitionRecords
@@ -153,6 +153,7 @@ func (m *MQ) DeleteTopics(ctx context.Context, topics ...string) error {
 			err := topic.Close()
 			if err != nil {
 				log.Printf("topic: %s关闭失败 %v", t, err)
+				continue
 			}
 			m.topics.Delete(t)
 		}

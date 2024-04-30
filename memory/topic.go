@@ -65,12 +65,11 @@ func (t *Topic) addProducer(producer mq.Producer) error {
 }
 
 // addMessage 往分区里面添加消息
-// 发送消息 producer生成msg--->add
 func (t *Topic) addMessage(msg *mq.Message) error {
 	partitionID := t.producerPartitionIDGetter.PartitionID(string(msg.Key))
 	return t.addMessageWithPartition(msg, partitionID)
-
 }
+
 func (t *Topic) addMessageWithPartition(msg *mq.Message, partitionID int64) error {
 	if partitionID < 0 || int(partitionID) >= len(t.partitions) {
 		return errs.ErrInvalidPartition

@@ -16,8 +16,9 @@ package memory
 
 import (
 	"context"
-	"github.com/ecodeclub/mq-api/internal/errs"
 	"sync/atomic"
+
+	"github.com/ecodeclub/mq-api/internal/errs"
 
 	"github.com/ecodeclub/mq-api"
 )

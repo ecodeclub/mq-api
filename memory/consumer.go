@@ -61,55 +61,59 @@ func (c *Consumer) Consume(ctx context.Context) (*mq.Message, error) {
 }
 
 // 启动Consume
-func (c *Consumer) Run() {
+func (c *Consumer) eventLoop() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			log.Printf("消费者 %s 开始消费数据", c.name)
-			for idx, record := range c.partitionRecords {
-				msgs := c.partitions[record.Index].getBatch(record.Cursor, limit)
-				for _, msg := range msgs {
-					log.Printf("消费者 %s 消费数据 %v", c.name, msg)
-					c.msgCh <- msg
-				}
-				record.Cursor += len(msgs)
-				errCh := make(chan error, 1)
-				c.reportCh <- &Event{
-					Type: ReportOffset,
-					Data: ReportData{
-						Records: []PartitionRecord{record},
-						ErrChan: errCh,
-					},
-				}
-				err := <-errCh
-				if err != nil {
-					log.Printf("上报偏移量失败：%v", err)
-					break
-				}
-				close(errCh)
-				c.partitionRecords[idx] = record
-			}
+			c.consumerAndReport()
 			log.Printf("消费者 %s 结束消费数据", c.name)
 		case event, ok := <-c.receiveCh:
 			if !ok {
 				return
 			}
 			// 处理各种事件
-			c.Handle(event)
+			c.handle(event)
 		}
 	}
 }
 
-func (c *Consumer) Handle(event *Event) {
+func (c *Consumer) consumerAndReport() {
+	for idx, record := range c.partitionRecords {
+		msgs := c.partitions[record.Index].getBatch(record.Offset, limit)
+		for _, msg := range msgs {
+			log.Printf("消费者 %s 消费数据 %v", c.name, msg)
+			c.msgCh <- msg
+		}
+		record.Offset += len(msgs)
+		errCh := make(chan error, 1)
+		c.reportCh <- &Event{
+			Type: ReportOffsetEvent,
+			Data: ReportData{
+				Records: []PartitionRecord{record},
+				ErrChan: errCh,
+			},
+		}
+		err := <-errCh
+		if err != nil {
+			log.Printf("上报偏移量失败：%v", err)
+			return
+		}
+		close(errCh)
+		c.partitionRecords[idx] = record
+	}
+}
+
+func (c *Consumer) handle(event *Event) {
 	switch event.Type {
-	// 服务端发起的重平衡事件
-	case Rejoin:
+	// 服务端发起的重新加入事件
+	case RejoinEvent:
 		// 消费者上报消费进度
 		log.Printf("消费者 %s开始上报消费进度", c.name)
 		c.reportCh <- &Event{
-			Type: RejoinAck,
+			Type: RejoinAckEvent,
 			Data: c.partitionRecords,
 		}
 		// 设置消费进度
@@ -118,9 +122,9 @@ func (c *Consumer) Handle(event *Event) {
 		c.partitionRecords, _ = partitionInfo.Data.([]PartitionRecord)
 		// 返回设置完成的信号
 		c.reportCh <- &Event{
-			Type: PartitionNotifyAck,
+			Type: PartitionNotifyAckEvent,
 		}
-	case Close:
+	case CloseEvent:
 		c.Close()
 	}
 }

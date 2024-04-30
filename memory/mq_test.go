@@ -1,10 +1,11 @@
 package memory
 
 import (
+	"testing"
+
 	"github.com/ecodeclub/ekit/syncx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestMQ(t *testing.T) {
@@ -17,7 +18,8 @@ func TestMQ(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := testmq.topics.Load("test_topic")
 	assert.Equal(t, ok, true)
-	testmq.Producer("test_topic1")
+	_, err = testmq.Producer("test_topic1")
+	require.NoError(t, err)
 	_, ok = testmq.topics.Load("test_topic1")
 	assert.Equal(t, ok, true)
 }
