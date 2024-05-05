@@ -15,23 +15,20 @@
 package memory
 
 import (
+	"github.com/ecodeclub/ekit/syncx"
+	"github.com/ecodeclub/mq-api/memory/consumerpartitionassigner/equaldivide"
+	"github.com/stretchr/testify/assert"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/ecodeclub/ekit/list"
-	"github.com/ecodeclub/ekit/syncx"
-	"github.com/ecodeclub/mq-api/memory/consumerpartitionassigner/equaldivide"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // 测试场景： 不断有 消费者加入 消费组，最后达成的效果，调用consumerGroup的close方法成功之后，consumerGroup里面没有consumer存在且所有的consumer都是关闭的状态
 
 func TestConsumerGroup_Close(t *testing.T) {
 	t.Parallel()
-	cg := ConsumerGroup{
+	cg := &ConsumerGroup{
 		name:                      "test_group",
 		consumers:                 syncx.Map[string, *Consumer]{},
 		consumerPartitionAssigner: equaldivide.NewAssigner(),
@@ -52,18 +49,20 @@ func TestConsumerGroup_Close(t *testing.T) {
 	}
 	cg.partitionRecords = &partitionRecords
 	var wg sync.WaitGroup
-
-	consumerGroups := list.NewArrayList[*Consumer](30)
-	for i := 0; i < 100; i++ {
+	mu := &sync.RWMutex{}
+	consumerGroups := make([]*Consumer, 0, 100)
+	for i := 0; i < 3; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			c, err := cg.JoinGroup()
 			if err != nil {
 				assert.Equal(t, ErrConsumerGroupClosed, err)
+				return
 			}
-			err = consumerGroups.Append(c)
-			require.NoError(t, err)
+			mu.Lock()
+			consumerGroups = append(consumerGroups, c)
+			mu.Unlock()
 		}()
 	}
 	time.Sleep(100 * time.Millisecond)

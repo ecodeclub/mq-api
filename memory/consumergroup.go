@@ -156,12 +156,10 @@ func (c *ConsumerGroup) reportOffset(records []PartitionRecord) error {
 func (c *ConsumerGroup) Close() {
 	c.once.Do(func() {
 		for {
-			log.Println("开始关闭", c.status)
 			if !atomic.CompareAndSwapInt32(&c.status, StatusStable, StatusStop) {
 				time.Sleep(defaultSleepTime)
 				continue
 			}
-			log.Println("正在关闭", c.status)
 			c.close()
 			return
 		}
