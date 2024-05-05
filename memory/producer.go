@@ -16,7 +16,7 @@ package memory
 
 import (
 	"context"
-	"sync/atomic"
+	"sync"
 
 	"github.com/ecodeclub/mq-api/internal/errs"
 
@@ -24,37 +24,40 @@ import (
 )
 
 type Producer struct {
+	mu     sync.RWMutex
 	t      *Topic
-	closed int32
+	closed bool
 }
 
 func (p *Producer) Produce(ctx context.Context, m *mq.Message) (*mq.ProducerResult, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return nil, errs.ErrProducerIsClosed
+	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
-	}
-	if p.isClosed() {
-		return nil, errs.ErrProducerIsClosed
 	}
 	err := p.t.addMessage(m)
 	return &mq.ProducerResult{}, err
 }
 
 func (p *Producer) ProduceWithPartition(ctx context.Context, m *mq.Message, partition int) (*mq.ProducerResult, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return nil, errs.ErrProducerIsClosed
+	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
-	}
-	if p.isClosed() {
-		return nil, errs.ErrProducerIsClosed
 	}
 	err := p.t.addMessageWithPartition(m, int64(partition))
 	return &mq.ProducerResult{}, err
 }
 
 func (p *Producer) Close() error {
-	atomic.StoreInt32(&p.closed, 1)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
 	return nil
-}
-
-func (p *Producer) isClosed() bool {
-	return atomic.LoadInt32(&p.closed) == 1
 }

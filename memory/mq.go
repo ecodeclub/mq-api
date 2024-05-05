@@ -61,7 +61,7 @@ func (m *MQ) CreateTopic(ctx context.Context, topic string, partitions int) erro
 	}
 	_, ok := m.topics.Load(topic)
 	if !ok {
-		m.topics.Store(topic, NewTopic(topic, partitions))
+		m.topics.Store(topic, newTopic(topic, partitions))
 	}
 	return nil
 }
@@ -74,7 +74,7 @@ func (m *MQ) Producer(topic string) (mq.Producer, error) {
 	}
 	t, ok := m.topics.Load(topic)
 	if !ok {
-		t = NewTopic(topic, defaultPartitions)
+		t = newTopic(topic, defaultPartitions)
 		m.topics.Store(topic, t)
 	}
 	p := &Producer{
@@ -95,7 +95,7 @@ func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 	}
 	t, ok := m.topics.Load(topic)
 	if !ok {
-		t = NewTopic(topic, defaultPartitions)
+		t = newTopic(topic, defaultPartitions)
 		m.topics.Store(topic, t)
 	}
 	group, ok := t.consumerGroups.Load(groupID)
@@ -118,7 +118,10 @@ func (m *MQ) Consumer(topic, groupID string) (mq.Consumer, error) {
 		}
 		group.partitionRecords = &partitionRecords
 	}
-	consumer := group.JoinGroup()
+	consumer, err := group.JoinGroup()
+	if err != nil {
+		return nil, err
+	}
 	t.consumerGroups.Store(groupID, group)
 	return consumer, nil
 }

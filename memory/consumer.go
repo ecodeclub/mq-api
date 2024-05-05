@@ -68,7 +68,7 @@ func (c *Consumer) eventLoop() {
 		select {
 		case <-ticker.C:
 			log.Printf("消费者 %s 开始消费数据", c.name)
-			c.consumerAndReport()
+			c.consumeAndReport()
 			log.Printf("消费者 %s 结束消费数据", c.name)
 		case event, ok := <-c.receiveCh:
 			if !ok {
@@ -80,7 +80,7 @@ func (c *Consumer) eventLoop() {
 	}
 }
 
-func (c *Consumer) consumerAndReport() {
+func (c *Consumer) consumeAndReport() {
 	for idx, record := range c.partitionRecords {
 		msgs := c.partitions[record.Index].getBatch(record.Offset, limit)
 		for _, msg := range msgs {
@@ -125,7 +125,14 @@ func (c *Consumer) handle(event *Event) {
 			Type: PartitionNotifyAckEvent,
 		}
 	case CloseEvent:
-		c.Close()
+		// 未返回错误不做处理
+		_ = c.Close()
+		ch, ok := event.Data.(chan struct{})
+		if !ok {
+			return
+		}
+		ch <- struct{}{}
+
 	}
 }
 

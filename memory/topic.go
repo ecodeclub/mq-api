@@ -37,9 +37,8 @@ type Topic struct {
 	producerPartitionIDGetter PartitionIDGetter
 	consumerPartitionAssigner ConsumerPartitionAssigner
 }
-type TopicOption func(t *Topic)
 
-func NewTopic(name string, partitions int) *Topic {
+func newTopic(name string, partitions int) *Topic {
 	t := &Topic{
 		name:                      name,
 		consumerGroups:            syncx.Map[string, *ConsumerGroup]{},
@@ -85,6 +84,7 @@ func (t *Topic) Close() error {
 	t.locker.Lock()
 	defer t.locker.Unlock()
 	if !t.closed {
+		t.closed = true
 		t.consumerGroups.Range(func(key string, value *ConsumerGroup) bool {
 			value.Close()
 			return true

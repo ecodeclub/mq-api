@@ -27,7 +27,10 @@ import (
 	"github.com/pkg/errors"
 )
 
-var ErrReportOffsetFail = errors.New("非平衡状态，无法上报偏移量")
+var (
+	ErrReportOffsetFail    = errors.New("非平衡状态，无法上报偏移量")
+	ErrConsumerGroupClosed = errors.New("消费组已经关闭")
+)
 
 const (
 	consumerCap      = 16
@@ -35,22 +38,27 @@ const (
 	msgChannelLength = 1000
 	defaultSleepTime = 100 * time.Millisecond
 
-	// ExitGroupEvent 退出事件
+	// ExitGroupEvent consumer=>consumer_group 表示消费者退出消费组的事件
 	ExitGroupEvent = "exit_group"
-	// ReportOffsetEvent 上报偏移量事件
+	// ReportOffsetEvent consumer=>consumer_group  表示消费者向消费组上报消费进度事件
 	ReportOffsetEvent = "report_offset"
-	// RejoinEvent 通知consumer重新加入消费组
+	// RejoinEvent consumer_group=>consumer  表示消费组通知消费者重新加入消费组
 	RejoinEvent = "rejoin"
-	// RejoinAckEvent 表示客户端收到重新加入消费组的指令并将offset进行上报
+	// RejoinAckEvent  consumer=>consumer_group  表示消费者收到重新加入消费组的指令并将offset进行上报
 	RejoinAckEvent = "rejoin_ack"
-	CloseEvent     = "close"
-	// PartitionNotifyEvent 下发分区情况事件
+	// CloseEvent consumer_group=>consumer 表示消费组关闭所有消费者，向所有消费者发出关闭事件
+	CloseEvent = "close"
+	// PartitionNotifyEvent consumer_group=>consumer 表示消费组向消费者下发分区情况
 	PartitionNotifyEvent = "partition_notify"
-	// PartitionNotifyAckEvent 下发分区情况确认事件
+	// PartitionNotifyAckEvent consumer=>consumer_group  表示消费者对消费组下发分区情况事件的确认
 	PartitionNotifyAckEvent = "partition_notify_ack"
 
 	StatusStable    = 1 // 稳定状态，可以正常的进行消费数据
 	StatusBalancing = 2
+	// 消费组关闭
+	StatusStop = 3
+	// 一个消费者正在退出消费组
+	StatusStopping = 4
 )
 
 // ConsumerGroup 表示消费组是并发安全的
@@ -115,7 +123,8 @@ func (c *ConsumerGroup) eventHandler(name string, event *Event) {
 func (c *ConsumerGroup) exitGroup(name string, closeCh chan struct{}) {
 	// 把自己从消费组内摘除
 	for {
-		if !atomic.CompareAndSwapInt32(&c.status, StatusStable, StatusBalancing) {
+		if !atomic.CompareAndSwapInt32(&c.status, StatusStable, StatusBalancing) &&
+			!atomic.CompareAndSwapInt32(&c.status, StatusStop, StatusStopping) {
 			time.Sleep(defaultSleepTime)
 			continue
 		}
@@ -125,14 +134,17 @@ func (c *ConsumerGroup) exitGroup(name string, closeCh chan struct{}) {
 		log.Printf("给消费者 %s 发送退出确认信号", name)
 		close(closeCh)
 		log.Printf("消费者 %s 成功退出消费组", name)
-		atomic.CompareAndSwapInt32(&c.status, StatusBalancing, StatusStable)
+		if !atomic.CompareAndSwapInt32(&c.status, StatusBalancing, StatusStable) {
+			atomic.CompareAndSwapInt32(&c.status, StatusStopping, StatusStop)
+		}
 		return
 	}
 }
 
 // ReportOffsetEvent 上报偏移量
 func (c *ConsumerGroup) reportOffset(records []PartitionRecord) error {
-	if atomic.LoadInt32(&c.status) != StatusStable {
+	status := atomic.LoadInt32(&c.status)
+	if status != StatusStable && status != StatusStop {
 		return ErrReportOffsetFail
 	}
 	for _, record := range records {
@@ -143,14 +155,28 @@ func (c *ConsumerGroup) reportOffset(records []PartitionRecord) error {
 
 func (c *ConsumerGroup) Close() {
 	c.once.Do(func() {
-		c.consumers.Range(func(key string, value *Consumer) bool {
-			value.receiveCh <- &Event{
-				Type: CloseEvent,
+		for {
+			log.Println("开始关闭", c.status)
+			if !atomic.CompareAndSwapInt32(&c.status, StatusStable, StatusStop) {
+				time.Sleep(defaultSleepTime)
+				continue
 			}
-			return true
-		})
-		// 等待一秒退出完成
-		time.Sleep(1 * time.Second)
+			log.Println("正在关闭", c.status)
+			c.close()
+			return
+		}
+	})
+}
+
+func (c *ConsumerGroup) close() {
+	c.consumers.Range(func(key string, value *Consumer) bool {
+		ch := make(chan struct{})
+		value.receiveCh <- &Event{
+			Type: CloseEvent,
+			Data: ch,
+		}
+		<-ch
+		return true
 	})
 }
 
@@ -172,57 +198,59 @@ func (c *ConsumerGroup) reBalance() {
 		return true
 	})
 	number := 0
+	log.Println("xxxxxxxxxx长度", length)
 	// 等待所有消费者都接收到信号，并上报自己offset
 	for length > 0 {
-		select {
-		case <-c.balanceCh:
-			number++
-			if number != length {
-				continue
-			}
-			// 接收到所有信号
-			log.Println("所有消费者已经接受到重平衡请求，并上报了消费进度")
-			consumerMap := c.consumerPartitionAssigner.AssignPartition(consumers, len(c.partitions))
-			// 通知所有消费者分配
-			log.Println("开始分配分区")
-			for consumerName, partitions := range consumerMap {
-				// 查找消费者所属的channel
-				log.Printf("消费者 %s 消费 %v 分区", consumerName, partitions)
-				consumer, ok := c.consumers.Load(consumerName)
-				if ok {
-					// 往每个消费者的receive_channel发送partition的信息
-					records := make([]PartitionRecord, 0, len(partitions))
-					for _, p := range partitions {
-						record, ok := c.partitionRecords.Load(p)
-						if ok {
-							records = append(records, record)
-						}
-					}
-					consumer.receiveCh <- &Event{
-						Type: PartitionNotifyEvent,
-						Data: records,
-					}
-					// 等待消费者接收到并保存
-					<-c.balanceCh
-
-				}
-			}
-			log.Println("重平衡结束")
-			return
-		default:
-			time.Sleep(defaultSleepTime)
+		<-c.balanceCh
+		number++
+		if number != length {
+			log.Println("xxxxxxxxxx number", number)
+			continue
 		}
+		// 接收到所有信号
+		log.Println("所有消费者已经接受到重平衡请求，并上报了消费进度")
+		consumerMap := c.consumerPartitionAssigner.AssignPartition(consumers, len(c.partitions))
+		// 通知所有消费者分配
+		log.Println("开始分配分区")
+		for consumerName, partitions := range consumerMap {
+			// 查找消费者所属的channel
+			log.Printf("消费者 %s 消费 %v 分区", consumerName, partitions)
+			consumer, ok := c.consumers.Load(consumerName)
+			if ok {
+				// 往每个消费者的receive_channel发送partition的信息
+				records := make([]PartitionRecord, 0, len(partitions))
+				for _, p := range partitions {
+					record, ok := c.partitionRecords.Load(p)
+					if ok {
+						records = append(records, record)
+					}
+				}
+				consumer.receiveCh <- &Event{
+					Type: PartitionNotifyEvent,
+					Data: records,
+				}
+				// 等待消费者接收到并保存
+				<-c.balanceCh
+
+			}
+		}
+		log.Println("重平衡结束")
+		return
 	}
-	log.Println("重平衡结束")
 }
 
 // JoinGroup 加入消费组
-func (c *ConsumerGroup) JoinGroup() *Consumer {
+func (c *ConsumerGroup) JoinGroup() (*Consumer, error) {
 	for {
+
+		if atomic.LoadInt32(&c.status) > StatusBalancing {
+			return nil, ErrConsumerGroupClosed
+		}
 		if !atomic.CompareAndSwapInt32(&c.status, StatusStable, StatusBalancing) {
 			time.Sleep(defaultSleepTime)
 			continue
 		}
+
 		var length int
 		c.consumers.Range(func(key string, value *Consumer) bool {
 			length++
@@ -240,23 +268,19 @@ func (c *ConsumerGroup) JoinGroup() *Consumer {
 			partitionRecords: []PartitionRecord{},
 			closeCh:          make(chan struct{}),
 		}
-		c.consumers.Store(name, &Consumer{
-			reportCh:  reportCh,
-			receiveCh: receiveCh,
-			name:      name,
-		})
-		go c.handleConsumerEvents(name, reportCh)
+		c.consumers.Store(name, consumer)
+		go c.consumerEventsHandler(name, reportCh)
 		go consumer.eventLoop()
 		log.Printf("新建消费者 %s", name)
 		// 重平衡分配分区
 		c.reBalance()
 		atomic.CompareAndSwapInt32(&c.status, StatusBalancing, StatusStable)
-		return consumer
+		return consumer, nil
 	}
 }
 
-// handleConsumerEvents 处理消费者上报的事件
-func (c *ConsumerGroup) handleConsumerEvents(name string, reportCh chan *Event) {
+// consumerEventsHandler 处理消费者上报的事件
+func (c *ConsumerGroup) consumerEventsHandler(name string, reportCh chan *Event) {
 	for event := range reportCh {
 		c.eventHandler(name, event)
 		if event.Type == ExitGroupEvent {

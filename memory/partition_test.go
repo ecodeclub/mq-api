@@ -56,7 +56,11 @@ func Test_Partition(t *testing.T) {
 			Offset: 4,
 		},
 	}, msgs)
+}
 
+// 测试多个goroutine往同一个队列中发送消息
+func Test_PartitionConcurrent(t *testing.T) {
+	t.Parallel()
 	// 测试多个goroutine往partition里写
 	p2 := NewPartition()
 	wg := &sync.WaitGroup{}
@@ -73,7 +77,7 @@ func Test_Partition(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	msgs = p2.getBatch(0, 16)
+	msgs := p2.getBatch(0, 16)
 	for idx := range msgs {
 		msgs[idx].Partition = 0
 		msgs[idx].Offset = 0
