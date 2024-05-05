@@ -15,13 +15,14 @@
 package memory
 
 import (
-	"github.com/ecodeclub/ekit/syncx"
-	"github.com/ecodeclub/mq-api/memory/consumerpartitionassigner/equaldivide"
-	"github.com/stretchr/testify/assert"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/ecodeclub/ekit/syncx"
+	"github.com/ecodeclub/mq-api/memory/consumerpartitionassigner/equaldivide"
+	"github.com/stretchr/testify/assert"
 )
 
 // 测试场景： 不断有 消费者加入 消费组，最后达成的效果，调用consumerGroup的close方法成功之后，consumerGroup里面没有consumer存在且所有的consumer都是关闭的状态
