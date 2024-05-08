@@ -260,6 +260,10 @@ func (b *TestSuite) TestMQ_Producer() {
 	err := b.messageQueue.CreateTopic(context.Background(), unknownTopic, 1)
 	require.NoError(t, err)
 	require.NoError(t, b.messageQueue.DeleteTopics(context.Background(), unknownTopic))
+	// 如果topic不存在会默认创建，不会报错
+	notExistTopic := "notExistTopic"
+	_, err = b.messageQueue.Producer(notExistTopic)
+	require.NoError(t, err)
 }
 
 func (b *TestSuite) TestMQ_Consumer() {
@@ -270,7 +274,7 @@ func (b *TestSuite) TestMQ_Consumer() {
 	err := b.messageQueue.CreateTopic(context.Background(), topic, 1)
 	require.NoError(t, err)
 	require.NoError(t, b.messageQueue.DeleteTopics(context.Background(), topic))
-
+	// 如果topic不存在会默认创建，不会报错
 	_, err = b.messageQueue.Consumer(topic, groupID)
 	require.NoError(t, err)
 }
