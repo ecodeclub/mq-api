@@ -30,6 +30,10 @@ import (
 	kafkago "github.com/segmentio/kafka-go"
 )
 
+const (
+	defaultBatchSize = 1
+)
+
 type Producer struct {
 	topic  string
 	writer *kafkago.Writer
@@ -45,9 +49,10 @@ func NewProducer(address []string, topic string, balancer kafkago.Balancer) *Pro
 		topic:  topic,
 		locker: &sync.RWMutex{},
 		writer: &kafkago.Writer{
-			Addr:     kafkago.TCP(address...),
-			Topic:    topic,
-			Balancer: balancer,
+			Addr:      kafkago.TCP(address...),
+			Topic:     topic,
+			Balancer:  balancer,
+			BatchSize: defaultBatchSize,
 		},
 		closed:    false,
 		closeOnce: &sync.Once{},

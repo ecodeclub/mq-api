@@ -35,7 +35,6 @@ func TestIsValidTopic(t *testing.T) {
 		}
 
 		for _, topic := range validTopics {
-			topic := topic
 			t.Run(topic, func(t *testing.T) {
 				t.Parallel()
 				assert.True(t, validator.IsValidTopic(topic), "Expected topic to be valid: %s", topic)
@@ -61,7 +60,6 @@ func TestIsValidTopic(t *testing.T) {
 		}
 
 		for _, topic := range invalidTopics {
-			topic := topic
 			t.Run(topic, func(t *testing.T) {
 				t.Parallel()
 				assert.False(t, validator.IsValidTopic(topic), "Expected topic to be invalid: %s", topic)

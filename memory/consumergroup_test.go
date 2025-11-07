@@ -71,13 +71,13 @@ func TestConsumerGroup_Close(t *testing.T) {
 	wg.Wait()
 	// consumerGroup中没有消费者
 	var flag atomic.Bool
-	cg.consumers.Range(func(key string, value *Consumer) bool {
+	cg.consumers.Range(func(_ string, _ *Consumer) bool {
 		flag.Store(true)
 		return true
 	})
 	assert.False(t, flag.Load())
 	// 所有加入的消费者都是关闭状态
-	cg.consumers.Range(func(key string, value *Consumer) bool {
+	cg.consumers.Range(func(_ string, value *Consumer) bool {
 		assert.True(t, value.closed)
 		return true
 	})

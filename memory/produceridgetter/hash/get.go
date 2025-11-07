@@ -29,5 +29,5 @@ func hashString(s string, numBuckets int) int64 {
 	h := fnv.New32a()
 	h.Write([]byte(s))
 	hash := h.Sum32()
-	return int64(hash % uint32(numBuckets))
+	return int64(int(hash) % numBuckets)
 }

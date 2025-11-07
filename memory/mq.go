@@ -17,7 +17,7 @@ package memory
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 
 	"github.com/ecodeclub/mq-api/internal/pkg/validator"
@@ -133,7 +133,7 @@ func (m *MQ) Close() error {
 	m.topics.Range(func(key string, value *Topic) bool {
 		err := value.Close()
 		if err != nil {
-			log.Printf("topic: %s关闭失败 %v", key, err)
+			slog.Error("topic关闭失败", slog.String("topic", key), slog.String("error", err.Error()))
 		}
 		return true
 	})
@@ -155,7 +155,7 @@ func (m *MQ) DeleteTopics(ctx context.Context, topics ...string) error {
 		if ok {
 			err := topic.Close()
 			if err != nil {
-				log.Printf("topic: %s关闭失败 %v", t, err)
+				slog.Error("topic关闭失败", slog.String("error", err.Error()))
 				continue
 			}
 			m.topics.Delete(t)
