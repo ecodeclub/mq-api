@@ -16,7 +16,6 @@ package memory
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -105,16 +104,13 @@ func (c *ConsumerGroup) eventHandler(name string, event *Event) {
 		var err error
 		err = c.reportOffset(data.Records)
 		data.ErrChan <- err
-		log.Printf("消费者%s上报offset成功", name)
 	case RejoinAckEvent:
 		// consumer响应重平衡信号返回的数据，返回的是当前所有分区的偏移量
 		records, _ := event.Data.([]PartitionRecord)
 		// 不管上报成不成功
 		_ = c.reportOffset(records)
-		log.Printf("消费者%s成功接受到重平衡信号，并上报offset", name)
 		c.balanceCh <- struct{}{}
 	case PartitionNotifyAckEvent:
-		log.Printf("消费者%s 成功设置分区信息", name)
 		c.balanceCh <- struct{}{}
 	}
 }
@@ -128,12 +124,9 @@ func (c *ConsumerGroup) exitGroup(name string, closeCh chan struct{}) {
 			time.Sleep(defaultSleepTime)
 			continue
 		}
-		log.Printf("消费者 %s 准备退出消费组", name)
 		c.consumers.Delete(name)
 		c.reBalance()
-		log.Printf("给消费者 %s 发送退出确认信号", name)
 		close(closeCh)
-		log.Printf("消费者 %s 成功退出消费组", name)
 		if !atomic.CompareAndSwapInt32(&c.status, StatusBalancing, StatusStable) {
 			atomic.CompareAndSwapInt32(&c.status, StatusStopping, StatusStop)
 		}
@@ -167,7 +160,7 @@ func (c *ConsumerGroup) Close() {
 }
 
 func (c *ConsumerGroup) close() {
-	c.consumers.Range(func(key string, value *Consumer) bool {
+	c.consumers.Range(func(_ string, value *Consumer) bool {
 		ch := make(chan struct{})
 		value.receiveCh <- &Event{
 			Type: CloseEvent,
@@ -180,39 +173,30 @@ func (c *ConsumerGroup) close() {
 
 // reBalance 单独使用该方法是并发不安全的
 func (c *ConsumerGroup) reBalance() {
-	log.Println("开始重平衡")
 	// 通知每一个消费者进行偏移量的上报
 	length := 0
 	consumers := make([]string, 0, consumerCap)
-	log.Println("开始给每个消费者，重平衡信号")
 	c.consumers.Range(func(key string, value *Consumer) bool {
-		log.Printf("开始通知消费者%s", key)
 		value.receiveCh <- &Event{
 			Type: RejoinEvent,
 		}
 		consumers = append(consumers, key)
 		length++
-		log.Printf("通知消费者%s成功", key)
 		return true
 	})
 	number := 0
-	log.Println("xxxxxxxxxx长度", length)
 	// 等待所有消费者都接收到信号，并上报自己offset
 	for length > 0 {
 		<-c.balanceCh
 		number++
 		if number != length {
-			log.Println("xxxxxxxxxx number", number)
 			continue
 		}
 		// 接收到所有信号
-		log.Println("所有消费者已经接受到重平衡请求，并上报了消费进度")
 		consumerMap := c.consumerPartitionAssigner.AssignPartition(consumers, len(c.partitions))
 		// 通知所有消费者分配
-		log.Println("开始分配分区")
 		for consumerName, partitions := range consumerMap {
 			// 查找消费者所属的channel
-			log.Printf("消费者 %s 消费 %v 分区", consumerName, partitions)
 			consumer, ok := c.consumers.Load(consumerName)
 			if ok {
 				// 往每个消费者的receive_channel发送partition的信息
@@ -232,7 +216,6 @@ func (c *ConsumerGroup) reBalance() {
 
 			}
 		}
-		log.Println("重平衡结束")
 		return
 	}
 }
@@ -250,7 +233,7 @@ func (c *ConsumerGroup) JoinGroup() (*Consumer, error) {
 		}
 
 		var length int
-		c.consumers.Range(func(key string, value *Consumer) bool {
+		c.consumers.Range(func(_ string, _ *Consumer) bool {
 			length++
 			return true
 		})
@@ -269,7 +252,6 @@ func (c *ConsumerGroup) JoinGroup() (*Consumer, error) {
 		c.consumers.Store(name, consumer)
 		go c.consumerEventsHandler(name, reportCh)
 		go consumer.eventLoop()
-		log.Printf("新建消费者 %s", name)
 		// 重平衡分配分区
 		c.reBalance()
 		atomic.CompareAndSwapInt32(&c.status, StatusBalancing, StatusStable)
@@ -286,11 +268,4 @@ func (c *ConsumerGroup) consumerEventsHandler(name string, reportCh chan *Event)
 			return
 		}
 	}
-}
-
-func min(i, j int) int {
-	if i < j {
-		return i
-	}
-	return j
 }

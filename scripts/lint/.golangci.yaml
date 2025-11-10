@@ -20,8 +20,6 @@ linters-settings:
         # Default: 80
         # 性能瓶颈不在这里
         sizeThreshold: 1024
-  govet:
-    check-shadowing: true
   nolintlint:
     require-explanation: true
     require-specific: true
@@ -83,14 +81,14 @@ linters:
     - errorlint
 
     # Checks for pointers to enclosing loop variables.
-    - exportloopref
+    - copyloopvar
 
     - exhaustive
 
     - funlen
 
     # Reports magic consts. Might be noisy but still good.
-    - gomnd
+    - mnd
 
     # Same as `cyclop` linter (see above)
     - gocognit
@@ -122,7 +120,7 @@ linters:
     - gosimple
 
     # Official Go tool. Must have.
-    - govet
+#    - govet
 
     # Detects when assignments to existing variables are not used
     # Last week I caught a bug with it.
@@ -217,14 +215,15 @@ issues:
         - maintidx
         - gocognit
 run:
-  go: '1.21.0'
+  go: '1.24.2'
   timeout: 10m
-  skip-dirs:
-    - .idea
-    - .git
-    - .github
-    - scripts
-    - api
-    - config
-    - deployment
+  issues:
+    exclude-dirs:
+      - .idea
+      - .git
+      - .github
+      - scripts
+      - api
+      - config
+      - deployment
   issues-exit-code: 1

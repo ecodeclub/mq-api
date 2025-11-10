@@ -16,7 +16,6 @@ package memory
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 
@@ -67,9 +66,7 @@ func (c *Consumer) eventLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			log.Printf("消费者 %s 开始消费数据", c.name)
 			c.consumeAndReport()
-			log.Printf("消费者 %s 结束消费数据", c.name)
 		case event, ok := <-c.receiveCh:
 			if !ok {
 				return
@@ -84,7 +81,6 @@ func (c *Consumer) consumeAndReport() {
 	for idx, record := range c.partitionRecords {
 		msgs := c.partitions[record.Index].getBatch(record.Offset, limit)
 		for _, msg := range msgs {
-			log.Printf("消费者 %s 消费数据 %v", c.name, msg)
 			c.msgCh <- msg
 		}
 		record.Offset += len(msgs)
@@ -98,7 +94,6 @@ func (c *Consumer) consumeAndReport() {
 		}
 		err := <-errCh
 		if err != nil {
-			log.Printf("上报偏移量失败：%v", err)
 			return
 		}
 		close(errCh)
@@ -111,14 +106,12 @@ func (c *Consumer) handle(event *Event) {
 	// 服务端发起的重新加入事件
 	case RejoinEvent:
 		// 消费者上报消费进度
-		log.Printf("消费者 %s开始上报消费进度", c.name)
 		c.reportCh <- &Event{
 			Type: RejoinAckEvent,
 			Data: c.partitionRecords,
 		}
 		// 设置消费进度
 		partitionInfo := <-c.receiveCh
-		log.Printf("消费者 %s接收到分区信息 %v", c.name, partitionInfo)
 		c.partitionRecords, _ = partitionInfo.Data.([]PartitionRecord)
 		// 返回设置完成的信号
 		c.reportCh <- &Event{
@@ -155,13 +148,11 @@ func (c *Consumer) Close() error {
 			Type: ExitGroupEvent,
 			Data: c.closeCh,
 		}
-		log.Printf("消费者 %s 准备关闭", c.name)
 		// 等待服务端退出完成
 		<-c.closeCh
 		// 关闭资源
 		close(c.receiveCh)
 		close(c.msgCh)
-		log.Printf("消费者 %s 关闭成功", c.name)
 	})
 
 	return nil

@@ -15,7 +15,6 @@
 package memory
 
 import (
-	"log"
 	"sync"
 
 	"github.com/ecodeclub/ekit/syncx"
@@ -76,7 +75,6 @@ func (t *Topic) addMessageWithPartition(msg *mq.Message, partitionID int64) erro
 	msg.Topic = t.name
 	msg.Partition = partitionID
 	t.partitions[partitionID].append(msg)
-	log.Printf("生产消息 %s,消息为 %s", t.name, msg.Value)
 	return nil
 }
 
@@ -85,7 +83,7 @@ func (t *Topic) Close() error {
 	defer t.locker.Unlock()
 	if !t.closed {
 		t.closed = true
-		t.consumerGroups.Range(func(key string, value *ConsumerGroup) bool {
+		t.consumerGroups.Range(func(_ string, value *ConsumerGroup) bool {
 			value.Close()
 			return true
 		})
